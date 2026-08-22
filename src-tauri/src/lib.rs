@@ -1,4 +1,5 @@
 pub mod db;
+pub mod engagement;
 pub mod error;
 pub mod paths;
 
