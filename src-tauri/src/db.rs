@@ -30,14 +30,21 @@ pub fn open(path: &Path) -> Result<Connection> {
 }
 
 pub fn open_index(root: &Path) -> Result<Connection> {
-    let conn = open(&paths::index_db_path(root))?;
-    migrate(&conn, INDEX_MIGRATIONS)?;
+    let mut conn = open(&paths::index_db_path(root))?;
+    migrate(&mut conn, INDEX_MIGRATIONS)?;
     Ok(conn)
 }
 
 /// Migraciones versionadas y append-only. Nunca editar una ya lanzada:
 /// añadir la siguiente.
-pub fn migrate(conn: &Connection, set: &[(&str, &str)]) -> Result<()> {
+///
+/// Cada migración se aplica y se registra dentro de una única transacción:
+/// si el proceso muere a mitad, o una sentencia posterior del mismo lote
+/// falla, no debe quedar ni SQL aplicado ni fila en `_migration` — de lo
+/// contrario la siguiente ejecución la reintentaría contra objetos que ya
+/// existen (nuestras migraciones no usan `IF NOT EXISTS`) y quedaría
+/// atascada sin recuperación salvo cirugía manual.
+pub fn migrate(conn: &mut Connection, set: &[(&str, &str)]) -> Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS _migration (
            name TEXT PRIMARY KEY,
@@ -52,11 +59,13 @@ pub fn migrate(conn: &Connection, set: &[(&str, &str)]) -> Result<()> {
             |r| r.get(0),
         )?;
         if ya == 0 {
-            conn.execute_batch(sql)?;
-            conn.execute(
+            let tx = conn.transaction()?;
+            tx.execute_batch(sql)?;
+            tx.execute(
                 "INSERT INTO _migration (name, applied_at) VALUES (?1, ?2)",
                 rusqlite::params![name, now_iso()],
             )?;
+            tx.commit()?;
         }
     }
     Ok(())
