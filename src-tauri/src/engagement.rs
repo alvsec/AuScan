@@ -91,3 +91,36 @@ pub fn open(root: &Path, id: &str) -> Result<Connection> {
     db::migrate(&mut conn, db::ENGAGEMENT_MIGRATIONS)?;
     Ok(conn)
 }
+
+/// Borra todo rastro local del engagement y deja una lápida en el índice.
+///
+/// La carpeta de exportación NO se toca: es el entregable y vive fuera
+/// del control de la app. La UI debe decirlo explícitamente.
+pub fn purge(root: &Path, id: &str) -> Result<EngagementRef> {
+    // engagement_dir valida el identificador: nada que no sea un UUID
+    // llega a un remove_dir_all.
+    let ruta = paths::engagement_dir(root, id)?;
+
+    if ruta.exists() {
+        std::fs::remove_dir_all(&ruta)?;
+    }
+
+    // Verificar, no confiar.
+    if ruta.exists() {
+        return Err(AppError::PurgeIncomplete(ruta.display().to_string()));
+    }
+
+    let purged_at = db::now_iso();
+    let index = db::open_index(root)?;
+    let filas = index.execute(
+        "UPDATE engagement_ref
+            SET state = 'purged', purged_at = COALESCE(purged_at, ?2)
+          WHERE id = ?1",
+        rusqlite::params![id, purged_at],
+    )?;
+    if filas == 0 {
+        return Err(AppError::EngagementNotFound(id.to_string()));
+    }
+
+    get(root, id)
+}
