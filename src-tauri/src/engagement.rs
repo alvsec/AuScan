@@ -21,9 +21,7 @@ pub struct EngagementRef {
 pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
     let codename = codename.trim();
     if codename.is_empty() {
-        return Err(AppError::InvalidEngagementId(
-            "el nombre en clave no puede estar vacío".to_string(),
-        ));
+        return Err(AppError::InvalidCodename);
     }
 
     let id = Uuid::new_v4().to_string();

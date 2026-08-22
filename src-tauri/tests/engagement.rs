@@ -1,3 +1,4 @@
+use auscan_lib::error::AppError;
 use auscan_lib::{engagement, paths};
 
 #[test]
@@ -89,5 +90,12 @@ fn open_de_un_id_inexistente_falla() {
 #[test]
 fn create_rechaza_un_codename_vacio() {
     let dir = tempfile::tempdir().unwrap();
-    assert!(engagement::create(dir.path(), "   ").is_err());
+    assert!(matches!(
+        engagement::create(dir.path(), "   "),
+        Err(AppError::InvalidCodename)
+    ));
+    assert!(matches!(
+        engagement::create(dir.path(), ""),
+        Err(AppError::InvalidCodename)
+    ));
 }

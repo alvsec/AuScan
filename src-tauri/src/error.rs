@@ -5,6 +5,9 @@ pub enum AppError {
     #[error("identificador de engagement inválido: {0:?}")]
     InvalidEngagementId(String),
 
+    #[error("el nombre en clave no puede estar vacío")]
+    InvalidCodename,
+
     #[error("objetivo fuera de alcance: {0}")]
     OutOfScope(String),
 
