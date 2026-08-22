@@ -10,7 +10,10 @@ pub const INDEX_MIGRATIONS: &[(&str, &str)] = &[(
     include_str!("../migrations/index/0001_index.sql"),
 )];
 
-pub const ENGAGEMENT_MIGRATIONS: &[(&str, &str)] = &[];
+pub const ENGAGEMENT_MIGRATIONS: &[(&str, &str)] = &[(
+    "0001_init",
+    include_str!("../migrations/engagement/0001_init.sql"),
+)];
 
 /// Abre una conexión con los tres pragmas obligatorios.
 ///
