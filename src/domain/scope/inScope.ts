@@ -18,7 +18,9 @@ function parseIpv4(s: string): Addr | null {
   if (p.length !== 4) return null;
   let v = 0n;
   for (const o of p) {
-    if (!/^\d{1,3}$/.test(o)) return null;
+    // Sin ceros a la izquierda: el parser de Rust rechaza "198.51.100.01",
+    // así que aceptarlo aquí sería divergir en silencio.
+    if (!/^(0|[1-9]\d{0,2})$/.test(o)) return null;
     const n = Number(o);
     if (n > 255) return null;
     v = (v << 8n) | BigInt(n);
@@ -27,12 +29,23 @@ function parseIpv4(s: string): Addr | null {
 }
 
 function parseIpv6(s: string): Addr | null {
-  // v4-mapeadas: se canonicalizan a v4, igual que Ipv6Addr::to_ipv4_mapped
-  // en Rust. Solo la forma con puntos; el corpus no usa la hexadecimal.
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(s);
-  if (mapped) return parseIpv4(mapped[1]!);
+  let text = s;
 
-  const halves = s.split("::");
+  // RFC 4291: el último grupo puede escribirse como IPv4 con puntos, y no
+  // solo en la forma ::ffff:. Rust acepta 2001:db8:a::203.0.113.5, así que
+  // aquí se traduce a dos grupos hexadecimales antes de seguir.
+  const ultimoDosPuntos = text.lastIndexOf(":");
+  if (ultimoDosPuntos === -1) return null;
+  const cola = text.slice(ultimoDosPuntos + 1);
+  if (cola.includes(".")) {
+    const v4 = parseIpv4(cola);
+    if (!v4) return null;
+    const alto = (v4.v >> 16n) & 0xffffn;
+    const bajo = v4.v & 0xffffn;
+    text = `${text.slice(0, ultimoDosPuntos + 1)}${alto.toString(16)}:${bajo.toString(16)}`;
+  }
+
+  const halves = text.split("::");
   if (halves.length > 2) return null;
   const head = halves[0] ? halves[0].split(":") : [];
   const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
@@ -52,6 +65,11 @@ function parseIpv6(s: string): Addr | null {
     if (!/^[0-9a-f]{1,4}$/i.test(g)) return null;
     v = (v << 16n) | BigInt(parseInt(g, 16));
   }
+
+  // Misma regla que Ipv6Addr::to_ipv4_mapped en Rust: solo ::ffff:a.b.c.d
+  // se reduce a v4. Las formas compatible-v4 (::a.b.c.d) y NAT64 no.
+  if (v >> 32n === 0xffffn) return { v: v & 0xffffffffn, bits: 32 };
+
   return { v, bits: 128 };
 }
 
@@ -62,6 +80,9 @@ export function parseAddr(s: string): Addr | null {
 }
 
 function maskOf(prefix: number, bits: 32 | 128): bigint {
+  // BigInt no lanza con un desplazamiento negativo: desplaza al otro lado
+  // y devolvería una máscara sin sentido. Mejor fallar aquí.
+  if (prefix < 0 || prefix > bits) throw new RangeError(`prefijo ${prefix} fuera de rango para /${bits}`);
   const total = BigInt(bits);
   return ((1n << total) - 1n) ^ ((1n << (total - BigInt(prefix))) - 1n);
 }
@@ -79,17 +100,18 @@ export function parseEntry(s: string): { net: Net } | { error: EntryError } {
 
   const head = t.slice(0, slash);
   const pStr = t.slice(slash + 1);
-  if (!/^\d{1,3}$/.test(pStr)) return { error: "invalid" };
+  // Sin ceros a la izquierda tampoco en el prefijo: Rust rechaza /032.
+  if (!/^(0|[1-9]\d{0,2})$/.test(pStr)) return { error: "invalid" };
   let prefix = Number(pStr);
 
-  // Notación mapeada con prefijo: ::ffff:a.b.c.d/n con n >= 96 es la red
-  // v4 a.b.c.d/(n-96). Con n < 96 desborda el rango mapeado y no es
-  // ninguna red v4. Mismo criterio que canonical_net en Rust.
-  const esMapeada = /^::ffff:\d{1,3}(?:\.\d{1,3}){3}$/i.test(head);
+  const eraTextualmenteV6 = head.includes(":");
   const a = parseAddr(head);
   if (!a) return { error: "invalid" };
 
-  if (esMapeada) {
+  if (eraTextualmenteV6 && a.bits === 32) {
+    // Notación mapeada con prefijo: ::ffff:a.b.c.d/n es la red v4
+    // a.b.c.d/(n-96). Con n < 96 desborda el rango mapeado y no es
+    // ninguna red v4. Mismo criterio que canonical_net en Rust.
     if (prefix < 96 || prefix > 128) return { error: "invalid" };
     prefix -= 96;
   } else if (prefix > a.bits) {
@@ -110,6 +132,12 @@ function contains(net: Net, a: Addr): boolean {
   return (a.v & maskOf(net.prefix, net.bits)) === net.base;
 }
 
+/// PRECONDICIÓN: `spec` viene de entradas ya persistidas, que Rust validó
+/// con parse_entry antes de guardarlas y almacena en forma canónica. Por eso
+/// aquí una entrada ilegible se descarta en silencio mientras que en Rust
+/// Scope::from_entries devuelve error: la asimetría es inalcanzable en
+/// producción. Si algún día esta función recibe texto sin validar, hay que
+/// revisarla.
 export function inScope(spec: ScopeSpec, target: string): Verdict {
   const a = parseAddr(target);
   if (!a) return "invalid";

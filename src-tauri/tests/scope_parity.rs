@@ -53,25 +53,30 @@ fn veredicto(s: &Scope, target: &str) -> &'static str {
     }
 }
 
+// Se acumulan TODAS las divergencias antes de fallar: abortar en la primera
+// es lo que dejó escondidas dos durante una revisión entera.
 #[test]
 fn el_guard_coincide_con_el_corpus() {
     let c: Corpus = serde_json::from_str(CORPUS).expect("corpus mal formado");
+    let mut fallos: Vec<String> = Vec::new();
     for caso in &c.cases {
         let spec = c.scopes.get(&caso.scope).expect("scope inexistente en el corpus");
         let s = construir(spec);
-        assert_eq!(
-            veredicto(&s, &caso.target),
-            caso.expect,
-            "scope {} · objetivo {:?}",
-            caso.scope,
-            caso.target
-        );
+        let real = veredicto(&s, &caso.target);
+        if real != caso.expect {
+            fallos.push(format!(
+                "{} · {:?}: rust={} corpus={}",
+                caso.scope, caso.target, real, caso.expect
+            ));
+        }
     }
+    assert!(fallos.is_empty(), "divergencias:\n{}", fallos.join("\n"));
 }
 
 #[test]
 fn el_parser_de_entradas_coincide_con_el_corpus() {
     let c: Corpus = serde_json::from_str(CORPUS).expect("corpus mal formado");
+    let mut fallos: Vec<String> = Vec::new();
     for e in &c.entries {
         let real = match scope::parse_entry(&e.input) {
             Ok(_) => "ok",
@@ -80,6 +85,9 @@ fn el_parser_de_entradas_coincide_con_el_corpus() {
             Err(AppError::InvalidAddress(_)) => "invalid",
             Err(otro) => panic!("veredicto inesperado: {otro:?}"),
         };
-        assert_eq!(real, e.expect, "entrada {:?}", e.input);
+        if real != e.expect {
+            fallos.push(format!("{:?}: rust={} corpus={}", e.input, real, e.expect));
+        }
     }
+    assert!(fallos.is_empty(), "divergencias:\n{}", fallos.join("\n"));
 }
