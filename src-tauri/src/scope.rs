@@ -39,6 +39,35 @@ pub fn canonical_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// Reduce una red v4-mapeada a su equivalente v4 real.
+///
+/// `::ffff:a.b.c.d/n` con n >= 96 es la red v4 `a.b.c.d/(n-96)`. Con
+/// n < 96 la red desborda el rango mapeado y no representa ninguna red
+/// v4: se rechaza en vez de recortarla en silencio.
+///
+/// Las formas compatible-v4 (`::a.b.c.d`) y NAT64 (`64:ff9b::/96`) NO se
+/// convierten a propósito: `to_ipv4_mapped` devuelve None para ambas y
+/// quedan como redes v6 corrientes, que no casan con objetivos v4. Falla
+/// cerrado, que es el lado correcto en el que equivocarse.
+fn canonical_net(net: IpNet) -> Result<IpNet> {
+    match net {
+        IpNet::V6(v6) => match v6.addr().to_ipv4_mapped() {
+            Some(v4) => {
+                let len = v6.prefix_len();
+                if len < 96 {
+                    return Err(AppError::InvalidAddress(net.to_string()));
+                }
+                Ok(IpNet::V4(
+                    Ipv4Net::new(v4, len - 96)
+                        .map_err(|_| AppError::InvalidAddress(net.to_string()))?,
+                ))
+            }
+            None => Ok(IpNet::V6(v6)),
+        },
+        v4 => Ok(v4),
+    }
+}
+
 /// Parsea una entrada de alcance a su forma canónica.
 ///
 /// Rechaza CIDR con bits de host puestos: `198.51.100.5/24` no dice si
@@ -54,6 +83,12 @@ pub fn parse_entry(s: &str) -> Result<IpNet> {
         let net: IpNet = s
             .parse()
             .map_err(|_| AppError::InvalidAddress(s.to_string()))?;
+        // Canonicalizar ANTES de comprobar los bits de host, para que una
+        // entrada en notación mapeada acabe siendo la misma red que su
+        // forma v4. Sin esto, un deny escrito como ::ffff:192.0.2.0/120
+        // se guardaría como red v6 y no excluiría nada: contains() entre
+        // familias distintas siempre es false.
+        let net = canonical_net(net)?;
         if net.addr() != net.network() {
             return Err(AppError::AmbiguousCidr(s.to_string()));
         }

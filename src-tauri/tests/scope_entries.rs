@@ -48,3 +48,24 @@ fn family_of_distingue_las_dos_familias() {
     assert_eq!(scope::family_of(&scope::parse_entry("198.51.100.0/24").unwrap()), "v4");
     assert_eq!(scope::family_of(&scope::parse_entry("2001:db8::/32").unwrap()), "v6");
 }
+
+#[test]
+fn una_red_v4_mapeada_se_canonicaliza_a_red_v4() {
+    let n = scope::parse_entry("::ffff:192.0.2.0/120").unwrap();
+    assert_eq!(scope::family_of(&n), "v4", "debe quedar como red v4, no v6");
+    assert_eq!(n.prefix_len(), 24, "/120 mapeado es /24 en v4");
+    assert_eq!(n.to_string(), "192.0.2.0/24");
+}
+
+#[test]
+fn una_red_mapeada_que_desborda_el_rango_se_rechaza() {
+    // Con prefijo < 96 la red se sale del rango mapeado y no representa
+    // ninguna red v4: recortarla en silencio sería adivinar.
+    assert!(scope::parse_entry("::ffff:192.0.2.0/64").is_err());
+}
+
+#[test]
+fn los_bits_de_host_se_detectan_tambien_en_notacion_mapeada() {
+    let e = scope::parse_entry("::ffff:192.0.2.65/120").unwrap_err();
+    assert!(matches!(e, auscan_lib::error::AppError::AmbiguousCidr(_)));
+}

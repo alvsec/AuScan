@@ -93,3 +93,25 @@ fn el_objetivo_validado_conserva_la_direccion_canonica() {
     let t = s.validate("::ffff:192.0.2.65").unwrap();
     assert_eq!(t.to_string(), "192.0.2.65", "se pasa a la herramienta ya canónica");
 }
+
+#[test]
+fn un_deny_escrito_en_notacion_mapeada_excluye_de_verdad() {
+    // Regresión: antes, la rama CIDR de parse_entry no canonicalizaba, así
+    // que este deny se guardaba como red v6 y no excluía nada — contains()
+    // entre familias distintas es siempre false. Un deny inerte es el peor
+    // fallo posible en esta pieza: dice "dentro de alcance" cuando el
+    // consultor había escrito explícitamente que no.
+    let s = scope(&["192.0.2.0/24"], &["::ffff:192.0.2.64/122"]);
+    assert!(s.validate("192.0.2.1").is_ok(), "fuera del deny, sigue autorizado");
+    assert!(
+        matches!(s.validate("192.0.2.65"), Err(AppError::OutOfScope(_))),
+        "el deny en notación mapeada debe excluir la dirección v4"
+    );
+}
+
+#[test]
+fn un_allow_escrito_en_notacion_mapeada_autoriza_de_verdad() {
+    let s = scope(&["::ffff:198.51.100.0/120"], &[]);
+    assert!(s.validate("198.51.100.9").is_ok());
+    assert!(s.validate("203.0.113.9").is_err());
+}
