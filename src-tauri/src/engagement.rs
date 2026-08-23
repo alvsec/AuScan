@@ -18,6 +18,21 @@ pub struct EngagementRef {
     pub purged_at: Option<String>,
 }
 
+/// Devuelve la forma canónica del identificador.
+///
+/// `Uuid::parse_str` acepta cuatro codificaciones del mismo UUID —simple,
+/// con guiones, entre llaves y urn— y todas insensibles a mayúsculas.
+/// `paths::engagement_dir` las normaliza todas al mismo directorio, así que
+/// cualquier comparación contra la cadena cruda del frontend puede fallar
+/// mientras la ruta acierta: se borraría el directorio sin cerrar la
+/// conexión ni escribir la lápida. Todo lo que cruce la frontera pasa por
+/// aquí primero.
+pub fn canonical_id(id: &str) -> Result<String> {
+    Ok(Uuid::parse_str(id)
+        .map_err(|_| AppError::InvalidEngagementId(id.to_string()))?
+        .to_string())
+}
+
 pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
     let codename = codename.trim();
     if codename.is_empty() {
@@ -39,12 +54,21 @@ pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
     )?;
     drop(conn);
 
-    let index = db::open_index(root)?;
-    index.execute(
-        "INSERT INTO engagement_ref (id, codename, created_at, state)
-         VALUES (?1, ?2, ?3, 'draft')",
-        rusqlite::params![id, codename, created_at],
-    )?;
+    // Si el índice falla ahora, el directorio ya existe y nadie lo
+    // referenciaría: se limpia en vez de dejar un huérfano.
+    let alta = (|| -> Result<()> {
+        let index = db::open_index(root)?;
+        index.execute(
+            "INSERT INTO engagement_ref (id, codename, created_at, state)
+             VALUES (?1, ?2, ?3, 'draft')",
+            rusqlite::params![id, codename, created_at],
+        )?;
+        Ok(())
+    })();
+    if let Err(e) = alta {
+        let _ = std::fs::remove_dir_all(paths::engagement_dir(root, &id)?);
+        return Err(e);
+    }
 
     Ok(EngagementRef {
         id,

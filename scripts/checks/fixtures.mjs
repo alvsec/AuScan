@@ -29,11 +29,19 @@ const RE_V6 = /\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b/gi;
 // colaba sin que nadie la viera.
 const RE_HORA = /^\d{1,2}:\d{2}:\d{2}$/;
 
-export function findForbiddenAddresses(text) {
+/// `incluirV6` se apaga al recorrer código fuente: en Rust, `db::open` casa
+/// con cualquier patrón razonable de IPv6 abreviada, y un check que denuncia
+/// sintaxis del lenguaje deja de leerse a la semana. En los ficheros de
+/// datos, donde una dirección de cliente entraría de verdad copiada y
+/// pegada, sí se aplica entero. Las IPv6 en código van por revisión, igual
+/// que los nombres de host.
+export function findForbiddenAddresses(text, { incluirV6 = true } = {}) {
   const malas = [];
 
   for (const m of text.matchAll(RE_V4)) {
     const ip = m[0];
+    // 999.1.1.1 no es una dirección: denunciarla sería ruido.
+    if (ip.split(".").some((o) => Number(o) > 255)) continue;
     if (V4_EXACTOS.includes(ip)) continue;
     if (V4_PERMITIDOS.some((p) => ip.startsWith(p))) continue;
     malas.push(ip);
@@ -45,6 +53,8 @@ export function findForbiddenAddresses(text) {
     if ("26ae".includes(mac[1])) continue;
     malas.push(m[0]);
   }
+
+  if (!incluirV6) return [...new Set(malas)];
 
   for (const m of text.matchAll(RE_V6)) {
     const token = m[0];
@@ -62,11 +72,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { readdirSync, readFileSync, statSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
 
-  if (!existsSync("fixtures")) {
-    console.log("fixtures: no hay directorio todavía");
-    process.exit(0);
-  }
-
   const ficheros = [];
   const recorrer = (d) => {
     for (const e of readdirSync(d)) {
@@ -75,11 +80,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       else ficheros.push(p);
     }
   };
-  recorrer("fixtures");
+  // No basta con mirar fixtures/: las direcciones de prueba viven también
+  // en los tests, y la regla solo sirve si se aplica donde puede colarse
+  // una de verdad.
+  for (const raiz of ["fixtures", "src-tauri/tests", "src"]) {
+    if (existsSync(raiz)) recorrer(raiz);
+  }
 
   let fallos = 0;
   for (const f of ficheros) {
-    const malas = findForbiddenAddresses(readFileSync(f, "utf8"));
+    const esDatos = f.startsWith("fixtures");
+    const malas = findForbiddenAddresses(readFileSync(f, "utf8"), {
+      incluirV6: esDatos,
+    });
     if (malas.length > 0) {
       console.error(`${f}: direcciones prohibidas → ${malas.join(", ")}`);
       fallos += malas.length;

@@ -1,6 +1,11 @@
 {
-  "app": { "name": "AUscan" },
-  "nav": { "engagements": "Engagements", "scope": "Scope" },
+  "app": {
+    "name": "AUscan"
+  },
+  "nav": {
+    "engagements": "Engagements",
+    "scope": "Scope"
+  },
   "engagements": {
     "title": "Engagements",
     "codename": "Code name",
@@ -32,6 +37,8 @@
       "ambiguous": "Ambiguous: use the network address or /32",
       "overbroad": "Too broad: /0 would authorise everything",
       "invalid": "Not a valid network"
-    }
+    },
+    "kind": "Entry type",
+    "entry": "Range or address"
   }
 }

@@ -1,16 +1,25 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api } from "../data/engagements";
+import type { ScopeKind } from "../domain/model/types";
 import { inScope, parseEntry, type Verdict } from "../domain/scope/inScope";
 import { useAppStore } from "../store/useAppStore";
 
 export function Scope() {
   const { t } = useTranslation();
-  const { scopeEntries, addScope, removeScope } = useAppStore();
+  const { scopeEntries, addScope, removeScope, loadScope, error } = useAppStore();
   const [borrador, setBorrador] = useState("");
+  const [tipo, setTipo] = useState<ScopeKind>("allow");
   const [objetivo, setObjetivo] = useState("");
   const [veredictoReal, setVeredictoReal] = useState<string | null>(null);
+
+  // Sin esto, el alcance solo se ve si el engagement se abrió en esta misma
+  // sesión: al volver a la pantalla, un engagement con alcance definido
+  // aparecería vacío.
+  useEffect(() => {
+    void loadScope();
+  }, [loadScope]);
 
   const spec = useMemo(
     () => ({
@@ -33,17 +42,43 @@ export function Scope() {
   return (
     <section>
       <h1>{t("scope.title")}</h1>
+      {error && <p role="alert">{error}</p>}
 
       <form
         onSubmit={(ev) => {
           ev.preventDefault();
           if (entradaParseada && "net" in entradaParseada) {
-            void addScope("allow", borrador.trim());
-            setBorrador("");
+            // El borrador solo se limpia si de verdad se guardó.
+            void addScope(tipo, borrador.trim()).then((ok) => {
+              if (ok) setBorrador("");
+            });
           }
         }}
       >
-        <label htmlFor="entrada">{t("scope.allow")}</label>
+        <fieldset>
+          <legend>{t("scope.kind")}</legend>
+          <label htmlFor="tipo-allow">
+            <input
+              id="tipo-allow"
+              type="radio"
+              name="tipo"
+              checked={tipo === "allow"}
+              onChange={() => setTipo("allow")}
+            />
+            {t("scope.allow")}
+          </label>
+          <label htmlFor="tipo-deny">
+            <input
+              id="tipo-deny"
+              type="radio"
+              name="tipo"
+              checked={tipo === "deny"}
+              onChange={() => setTipo("deny")}
+            />
+            {t("scope.deny")}
+          </label>
+        </fieldset>
+        <label htmlFor="entrada">{t("scope.entry")}</label>
         <input
           id="entrada"
           placeholder={t("scope.placeholder")}

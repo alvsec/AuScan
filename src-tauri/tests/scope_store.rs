@@ -42,8 +42,8 @@ fn un_alcance_que_autoriza_todo_se_rechaza() {
         );
         assert!(scope::add_entry(&conn, ScopeKind::Allow, todo, None).is_err());
     }
-    // Un /8 sigue siendo enorme pero es decisión del consultor, no nuestra.
-    assert!(scope::parse_entry("10.0.0.0/8").is_ok());
+    // Un prefijo ancho sigue siendo decisión del consultor, no nuestra.
+    assert!(scope::parse_entry("198.51.100.0/24").is_ok());
 }
 
 #[test]

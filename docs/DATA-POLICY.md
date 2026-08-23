@@ -5,9 +5,16 @@ Qué guarda AUscan, dónde y durante cuánto tiempo. Sin letra pequeña.
 ## Resumen
 
 AUscan no tiene servidor, ni cuentas, ni telemetría, ni actualizaciones
-automáticas. **La app no hace ninguna conexión de red.** Las únicas conexiones
-que existen durante una auditoría las hacen las herramientas externas, contra el
-alcance que tú autorizas.
+automáticas. **La app no abre ninguna conexión de red por su cuenta.** Las
+conexiones que existen durante una auditoría las hacen las herramientas externas,
+contra el alcance que tú autorizas.
+
+Una excepción, dicha por delante: cuando lances una ejecución contra un objetivo
+escrito como nombre y no como IP, la app resolverá ese nombre con el resolvedor
+del sistema para poder validarlo antes de pasárselo a ninguna herramienta. La
+comprobación de alcance de la pantalla no resuelve nada: acepta solo direcciones
+literales, para no convertirse en un canal por el que sacar datos en consultas
+DNS.
 
 ## Dónde vive todo
 

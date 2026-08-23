@@ -102,3 +102,63 @@ fn purge_de_un_id_invalido_falla_sin_borrar_nada() {
     assert!(paths::engagement_dir(root, &e.id).unwrap().is_dir());
     let _ = db::open_index(root).unwrap();
 }
+
+#[test]
+fn canonical_id_normaliza_las_cuatro_codificaciones() {
+    let esperado = "7f3a4c2e-0b1d-4e5f-8a9b-1c2d3e4f5a6b";
+    for forma in [
+        "7f3a4c2e-0b1d-4e5f-8a9b-1c2d3e4f5a6b",
+        "7F3A4C2E-0B1D-4E5F-8A9B-1C2D3E4F5A6B",
+        "7f3a4c2e0b1d4e5f8a9b1c2d3e4f5a6b",
+        "{7f3a4c2e-0b1d-4e5f-8a9b-1c2d3e4f5a6b}",
+        "urn:uuid:7f3a4c2e-0b1d-4e5f-8a9b-1c2d3e4f5a6b",
+    ] {
+        assert_eq!(
+            engagement::canonical_id(forma).unwrap(),
+            esperado,
+            "{forma} debería canonicalizarse"
+        );
+    }
+    assert!(engagement::canonical_id("../..").is_err());
+    assert!(engagement::canonical_id("no-soy-un-uuid").is_err());
+}
+
+#[test]
+fn purgar_con_otra_codificacion_del_mismo_id_deja_lapida() {
+    // Regresión: la ruta se canonicalizaba pero la comparación con el
+    // engagement abierto y el UPDATE del índice usaban la cadena cruda. Con
+    // el identificador en mayúsculas y llaves se borraba el directorio, no
+    // se cerraba la conexión y no se escribía la lápida: el índice seguía
+    // diciendo 'draft' sobre datos que ya no existían.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let e = engagement::create(root, "CLAVEL").unwrap();
+
+    let disfrazado = format!("{{{}}}", e.id.to_uppercase());
+    let id = engagement::canonical_id(&disfrazado).unwrap();
+    assert_eq!(id, e.id);
+
+    let lapida = engagement::purge(root, &id).unwrap();
+    assert_eq!(lapida.state, "purged");
+    assert!(lapida.purged_at.is_some());
+    assert!(!paths::engagement_dir(root, &e.id).unwrap().exists());
+}
+
+#[test]
+fn si_falla_el_alta_en_el_indice_no_queda_directorio_huerfano() {
+    // El índice se corrompe a propósito para forzar el fallo del INSERT.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    engagement::create(root, "PRIMERO").unwrap();
+    std::fs::write(paths::index_db_path(root), b"esto no es una base sqlite").unwrap();
+    for sufijo in ["-wal", "-shm"] {
+        let p = paths::index_db_path(root).with_extension(format!("db{sufijo}"));
+        let _ = std::fs::remove_file(p);
+    }
+
+    let antes = std::fs::read_dir(paths::engagements_dir(root)).unwrap().count();
+    let r = engagement::create(root, "SEGUNDO");
+    assert!(r.is_err(), "con el índice roto, create debe fallar");
+    let despues = std::fs::read_dir(paths::engagements_dir(root)).unwrap().count();
+    assert_eq!(antes, despues, "no debe quedar un directorio sin referencia");
+}

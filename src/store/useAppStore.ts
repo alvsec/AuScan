@@ -13,7 +13,7 @@ type AppStore = {
   open: (id: string) => Promise<void>;
   purge: (id: string) => Promise<void>;
   loadScope: () => Promise<void>;
-  addScope: (kind: ScopeKind, entry: string) => Promise<void>;
+  addScope: (kind: ScopeKind, entry: string) => Promise<boolean>;
   removeScope: (id: number) => Promise<void>;
 };
 
@@ -73,12 +73,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
+  // Devuelve si la entrada llegó a persistirse. En una herramienta cuya
+  // propiedad de seguridad es "el alcance es exactamente el que declaraste",
+  // una entrada que falla en silencio es el peor fallo disponible: el
+  // operador cree que el rango está autorizado y no lo está.
   addScope: async (kind, entry) => {
     try {
       await api.scopeAdd(kind, entry);
+      set({ error: null });
       await get().loadScope();
+      return true;
     } catch (e) {
       set({ error: mensaje(e) });
+      return false;
     }
   },
 

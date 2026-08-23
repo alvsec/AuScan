@@ -14,11 +14,13 @@ fn scope(allow: &[&str], deny: &[&str]) -> Scope {
 
 #[test]
 fn los_limites_del_cidr_caen_del_lado_correcto() {
-    let s = scope(&["198.51.100.0/24"], &[]);
-    assert!(s.validate("198.51.100.0").is_ok(), "la dirección de red está dentro");
-    assert!(s.validate("198.51.100.255").is_ok(), "el broadcast está dentro");
-    assert!(s.validate("198.51.99.255").is_err(), "la anterior está fuera");
-    assert!(s.validate("198.51.101.0").is_err(), "la siguiente está fuera");
+    // El alcance va al centro del bloque de documentación para que los
+    // vecinos de ambos lados caigan también dentro de RFC 5737.
+    let s = scope(&["198.51.100.64/26"], &[]);
+    assert!(s.validate("198.51.100.64").is_ok(), "la dirección de red está dentro");
+    assert!(s.validate("198.51.100.127").is_ok(), "el broadcast está dentro");
+    assert!(s.validate("198.51.100.63").is_err(), "la anterior está fuera");
+    assert!(s.validate("198.51.100.128").is_err(), "la siguiente está fuera");
 }
 
 #[test]
@@ -53,11 +55,11 @@ fn un_alcance_sin_allow_rechaza_todo() {
 
 #[test]
 fn ipv6_funciona_igual_en_forma_comprimida_y_expandida() {
-    let s = scope(&["2001:db8::/32"], &["2001:db8:dead::/48"]);
-    assert!(s.validate("2001:db8::1").is_ok());
-    assert!(s.validate("2001:0db8:0000:0000:0000:0000:0000:0001").is_ok());
-    assert!(s.validate("2001:db8:dead:beef::1").is_err());
-    assert!(s.validate("2001:db9::1").is_err());
+    let s = scope(&["2001:db8:a::/48"], &["2001:db8:a:dead::/64"]);
+    assert!(s.validate("2001:db8:a::1").is_ok());
+    assert!(s.validate("2001:0db8:000a:0000:0000:0000:0000:0001").is_ok());
+    assert!(s.validate("2001:db8:a:dead::1").is_err());
+    assert!(s.validate("2001:db8:b::1").is_err());
 }
 
 #[test]

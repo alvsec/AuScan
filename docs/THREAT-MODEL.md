@@ -102,7 +102,18 @@ Si `cargo` no responde, el check **sale con error** en vez de pasar en verde. Un
 check que no puede comprobar tiene que decirlo: si no, deja de comprobar sin que
 nadie se entere.
 
-**Dónde:** `scripts/checks/no-http-client.mjs`
+La webview corre con una CSP restrictiva (`default-src 'self'`) y su capability
+concede únicamente `core:default`. No hay plugin de apertura de URLs ni de
+diálogos: conceder permisos que nadie usa solo amplía lo que alcanzaría una
+webview comprometida.
+
+`scope_check` acepta solo direcciones literales. Resolver nombres ahí lo
+convertiría en un oráculo de DNS: cualquier cadena de la webview saldría a la red
+en una consulta antes de que el alcance tuviera nada que decir, y el error
+posterior haría que todo pareciese normal.
+
+**Dónde:** `scripts/checks/no-http-client.mjs` · `src-tauri/tauri.conf.json` ·
+`src-tauri/capabilities/default.json` · `src-tauri/src/lib.rs` (`scope_check`)
 
 ### T8 · Abuso de la elevación de privilegios
 
@@ -128,10 +139,17 @@ FileVault o BitLocker. No hay cifrado de aplicación, y el porqué está en
 ### T11 · Travesía de directorios al purgar
 
 `purge` acaba llamando a `remove_dir_all` con una ruta derivada de un
-identificador que en su día vendrá del frontend. `paths::engagement_dir` parsea
+identificador que llega del frontend. `paths::engagement_dir` parsea
 ese identificador como UUID y usa el UUID **reserializado** como componente de
 ruta, así que ninguna cadena sobrevive: `../../etc` no llega a ser una ruta.
 `engagement_db_path` y `raw_dir` pasan las dos por esa misma función.
+
+Además, todo identificador se canonicaliza al cruzar la frontera de comandos
+(`engagement::canonical_id`). `Uuid::parse_str` acepta cuatro codificaciones del
+mismo UUID, y la ruta las normalizaba todas mientras las comparaciones usaban la
+cadena cruda: con el identificador entre llaves y en mayúsculas se borraba el
+directorio sin cerrar la conexión ni escribir la lápida, y el índice seguía
+diciendo que el engagement estaba vivo.
 
 **Dónde:** `src-tauri/src/paths.rs` · `src-tauri/tests/paths.rs`
 

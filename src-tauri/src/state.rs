@@ -24,18 +24,15 @@ impl AppState {
     }
 
     /// Ejecuta `f` sobre la conexión del engagement abierto.
+    ///
+    /// Un mutex envenenado se recupera en vez de propagar el pánico: si no,
+    /// un único fallo dejaría todos los comandos de alcance inservibles
+    /// hasta reiniciar, con un engagement abierto y datos de cliente
+    /// cargados. El dato que protege sigue siendo consistente porque nada
+    /// dentro del lock lo deja a medias.
     pub fn with_open<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-        let guard = self.open.lock().expect("mutex envenenado");
+        let guard = self.open.lock().unwrap_or_else(|e| e.into_inner());
         let abierto = guard.as_ref().ok_or(AppError::NoEngagementOpen)?;
         f(&abierto.conn)
-    }
-
-    /// Cierra el engagement abierto, si lo hay.
-    ///
-    /// Imprescindible antes de purgar: en Windows no se puede borrar un
-    /// fichero con un descriptor abierto.
-    pub fn close(&self) {
-        let mut guard = self.open.lock().expect("mutex envenenado");
-        *guard = None;
     }
 }

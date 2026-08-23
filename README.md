@@ -22,8 +22,9 @@ delito** en España y en la mayoría de jurisdicciones. AUscan no comprueba —n
 puede comprobar— que tengas ese permiso: impone el alcance que tú le declaras y
 confía en que se corresponda con lo que firmaste.
 
-Cada engagement registra quién autorizó el trabajo y la referencia del documento.
-Está ahí porque es la primera cosa que te van a preguntar si algo va mal.
+El esquema reserva quién autorizó el trabajo y la referencia del documento —es
+la primera cosa que te van a preguntar si algo va mal—, pero **capturarlos es
+parte de la siguiente fase**: hoy esas columnas existen y están vacías.
 
 ---
 
@@ -89,8 +90,12 @@ nmap corre como root y la app no, la app no puede matarlo.
 
 ## Datos
 
-Sin telemetría, sin cuentas, sin servidor. **La app no hace ninguna conexión de
-red**; solo la hacen las herramientas que lanza, contra el alcance que autorizas.
+Sin telemetría, sin cuentas, sin servidor. **La app no abre ninguna conexión de
+red por su cuenta**: las conexiones contra el alcance las hacen las herramientas
+que lanza. La única excepción prevista es la resolución de nombres, y solo
+cuando lances una ejecución contra un objetivo escrito como nombre en vez de
+como IP; la comprobación de alcance de la pantalla acepta solo direcciones
+literales precisamente para no convertirse en un canal de salida.
 
 Cada engagement vive en su propio directorio, con su base y su salida cruda
 dentro. Purgar es borrar ese directorio y comprobar que no queda nada — un test

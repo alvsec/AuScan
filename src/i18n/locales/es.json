@@ -1,6 +1,11 @@
 {
-  "app": { "name": "AUscan" },
-  "nav": { "engagements": "Engagements", "scope": "Alcance" },
+  "app": {
+    "name": "AUscan"
+  },
+  "nav": {
+    "engagements": "Engagements",
+    "scope": "Alcance"
+  },
   "engagements": {
     "title": "Engagements",
     "codename": "Nombre en clave",
@@ -32,6 +37,8 @@
       "ambiguous": "Ambiguo: usa la dirección de red o /32",
       "overbroad": "Demasiado amplio: /0 autorizaría todo",
       "invalid": "No es una red válida"
-    }
+    },
+    "kind": "Tipo de entrada",
+    "entry": "Rango o dirección"
   }
 }
