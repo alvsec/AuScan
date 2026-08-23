@@ -201,3 +201,53 @@ impl Scope {
         self.validate_ip(ip)
     }
 }
+
+/// Resolución de nombres, inyectable para que los tests no toquen la red.
+///
+/// Un test que depende del DNS es un test que falla en un avión y miente
+/// en CI.
+pub trait Resolver: Send + Sync {
+    fn resolve(&self, host: &str) -> std::io::Result<Vec<IpAddr>>;
+}
+
+pub struct SystemResolver;
+
+impl Resolver for SystemResolver {
+    fn resolve(&self, host: &str) -> std::io::Result<Vec<IpAddr>> {
+        use std::net::ToSocketAddrs;
+        Ok((host, 0u16).to_socket_addrs()?.map(|sa| sa.ip()).collect())
+    }
+}
+
+impl Scope {
+    /// Resuelve el objetivo y exige que TODAS sus direcciones estén en
+    /// alcance.
+    ///
+    /// A las herramientas se les pasan las IPs que salen de aquí, nunca
+    /// el nombre: así ninguna puede volver a resolver por su cuenta y
+    /// acabar tocando algo que el guard nunca llegó a ver.
+    ///
+    /// Un nombre que apunta dentro y fuera a la vez se rechaza entero. No
+    /// hay resolución parcial: sería justo el caso en el que un objetivo
+    /// no autorizado entra por la puerta de atrás.
+    pub fn validate_target(&self, target: &str, r: &dyn Resolver) -> Result<Vec<ScopedTarget>> {
+        let t = target.trim();
+        if t.is_empty() {
+            return Err(AppError::InvalidAddress(target.to_string()));
+        }
+
+        if let Ok(ip) = t.parse::<IpAddr>() {
+            return Ok(vec![self.validate_ip(ip)?]);
+        }
+
+        let ips = r
+            .resolve(t)
+            .map_err(|_| AppError::UnresolvableHost(t.to_string()))?;
+        if ips.is_empty() {
+            return Err(AppError::UnresolvableHost(t.to_string()));
+        }
+
+        // collect sobre Result corta en el primer error: todo o nada.
+        ips.into_iter().map(|ip| self.validate_ip(ip)).collect()
+    }
+}
