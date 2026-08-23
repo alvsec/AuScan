@@ -1,0 +1,37 @@
+{
+  "app": { "name": "AUscan" },
+  "nav": { "engagements": "Engagements", "scope": "Scope" },
+  "engagements": {
+    "title": "Engagements",
+    "codename": "Code name",
+    "codenameHint": "An alias. Never the client's real name.",
+    "create": "Create",
+    "open": "Open",
+    "purge": "Purge",
+    "empty": "No engagements yet.",
+    "confirmPurge": "All local data for \"{{codename}}\" will be deleted. The export folder is NOT touched: it is your deliverable and lives outside the app.",
+    "confirm": "Purge permanently",
+    "cancel": "Cancel"
+  },
+  "scope": {
+    "title": "Scope",
+    "allow": "Allowed",
+    "deny": "Excluded",
+    "add": "Add",
+    "remove": "Remove",
+    "placeholder": "198.51.100.0/24",
+    "empty": "With no allowed entry, nothing can be launched.",
+    "check": "Check target",
+    "verdict": {
+      "in": "In scope",
+      "out": "Out of scope",
+      "empty-scope": "Empty scope: nothing is authorised",
+      "invalid": "Not a valid address"
+    },
+    "entryError": {
+      "ambiguous": "Ambiguous: use the network address or /32",
+      "overbroad": "Too broad: /0 would authorise everything",
+      "invalid": "Not a valid network"
+    }
+  }
+}

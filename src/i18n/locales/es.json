@@ -1,0 +1,37 @@
+{
+  "app": { "name": "AUscan" },
+  "nav": { "engagements": "Engagements", "scope": "Alcance" },
+  "engagements": {
+    "title": "Engagements",
+    "codename": "Nombre en clave",
+    "codenameHint": "Un alias. Nunca el nombre real del cliente.",
+    "create": "Crear",
+    "open": "Abrir",
+    "purge": "Purgar",
+    "empty": "Todavía no hay ningún engagement.",
+    "confirmPurge": "Se borrarán todos los datos locales de «{{codename}}». La carpeta de exportación NO se toca: es tu entregable y vive fuera de la app.",
+    "confirm": "Purgar definitivamente",
+    "cancel": "Cancelar"
+  },
+  "scope": {
+    "title": "Alcance",
+    "allow": "Autorizado",
+    "deny": "Excluido",
+    "add": "Añadir",
+    "remove": "Quitar",
+    "placeholder": "198.51.100.0/24",
+    "empty": "Sin ninguna entrada autorizada no se puede lanzar nada.",
+    "check": "Comprobar objetivo",
+    "verdict": {
+      "in": "Dentro de alcance",
+      "out": "Fuera de alcance",
+      "empty-scope": "Alcance vacío: no hay nada autorizado",
+      "invalid": "No es una dirección válida"
+    },
+    "entryError": {
+      "ambiguous": "Ambiguo: usa la dirección de red o /32",
+      "overbroad": "Demasiado amplio: /0 autorizaría todo",
+      "invalid": "No es una red válida"
+    }
+  }
+}
