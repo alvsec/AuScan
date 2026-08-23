@@ -17,6 +17,9 @@ pub enum AppError {
     #[error("entrada de alcance ambigua: {0} — usa la dirección de red o /32")]
     AmbiguousCidr(String),
 
+    #[error("alcance demasiado amplio: {0} autorizaría todo el espacio de direcciones")]
+    OverbroadScope(String),
+
     #[error("dirección o rango no válido: {0}")]
     InvalidAddress(String),
 

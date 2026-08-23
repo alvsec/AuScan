@@ -92,6 +92,13 @@ pub fn parse_entry(s: &str) -> Result<IpNet> {
         if net.addr() != net.network() {
             return Err(AppError::AmbiguousCidr(s.to_string()));
         }
+        // Un /0 no es un alcance: es la ausencia de uno. En una auditoría
+        // con autorización escrita, autorizar todo el espacio de
+        // direcciones nunca es lo que el cliente firmó. Cualquier prefijo
+        // más estrecho es decisión del consultor, no nuestra.
+        if net.prefix_len() == 0 {
+            return Err(AppError::OverbroadScope(s.to_string()));
+        }
         Ok(net)
     } else {
         let ip = canonical_ip(
@@ -250,4 +257,85 @@ impl Scope {
         // collect sobre Result corta en el primer error: todo o nada.
         ips.into_iter().map(|ip| self.validate_ip(ip)).collect()
     }
+}
+
+// ---------------------------------------------------------------------
+// Persistencia
+// ---------------------------------------------------------------------
+
+use rusqlite::Connection;
+
+use crate::db;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeEntry {
+    pub id: i64,
+    pub kind: ScopeKind,
+    pub family: String,
+    pub cidr: String,
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+pub fn add_entry(
+    conn: &Connection,
+    kind: ScopeKind,
+    raw: &str,
+    note: Option<&str>,
+) -> Result<ScopeEntry> {
+    // Se valida ANTES de tocar la base: una entrada que no parsea no
+    // llega nunca a persistirse.
+    let net = parse_entry(raw)?;
+    let cidr = net.to_string();
+    let family = family_of(&net).to_string();
+    let created_at = db::now_iso();
+
+    conn.execute(
+        "INSERT INTO scope_entry (kind, family, cidr, note, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![kind.as_str(), family, cidr, note, created_at],
+    )?;
+
+    Ok(ScopeEntry {
+        id: conn.last_insert_rowid(),
+        kind,
+        family,
+        cidr,
+        note: note.map(str::to_string),
+        created_at,
+    })
+}
+
+pub fn remove_entry(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM scope_entry WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+pub fn list_entries(conn: &Connection) -> Result<Vec<ScopeEntry>> {
+    let mut st = conn.prepare(
+        "SELECT id, kind, family, cidr, note, created_at
+         FROM scope_entry ORDER BY kind, cidr",
+    )?;
+    let filas = st.query_map([], |r| {
+        let kind: String = r.get(1)?;
+        Ok(ScopeEntry {
+            id: r.get(0)?,
+            kind: if kind == "deny" { ScopeKind::Deny } else { ScopeKind::Allow },
+            family: r.get(2)?,
+            cidr: r.get(3)?,
+            note: r.get(4)?,
+            created_at: r.get(5)?,
+        })
+    })?;
+    Ok(filas.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// Reconstruye el `Scope` a partir de lo persistido.
+pub fn load(conn: &Connection) -> Result<Scope> {
+    let entradas: Vec<(ScopeKind, String)> = list_entries(conn)?
+        .into_iter()
+        .map(|e| (e.kind, e.cidr))
+        .collect();
+    Scope::from_entries(&entradas)
 }

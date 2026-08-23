@@ -27,6 +27,7 @@ uuid = { version = "1.25.0", features = ["v4"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 time = { version = "0.3.55", features = ["formatting"] }
 ipnet = { version = "2.12.1", features = ["serde"] }
+tauri-plugin-dialog = "2.7.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
