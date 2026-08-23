@@ -1,69 +1,317 @@
 {
   "_nota": "Corpus compartido por src-tauri/tests/scope_parity.rs y src/domain/scope/inScope.test.ts. SOLO rangos de documentación: RFC 5737 (192.0.2/24, 198.51.100/24, 203.0.113/24) y RFC 3849 (2001:db8::/32). Los alcances se eligen estrechos a propósito para que las sondas de adyacencia caigan también dentro de esos bloques.",
   "scopes": {
-    "basico":         { "allow": ["198.51.100.0/25"], "deny": ["198.51.100.64/26"] },
-    "rangoCompleto":  { "allow": ["203.0.113.0/24"], "deny": [] },
-    "vacio":          { "allow": [], "deny": [] },
-    "soloDeny":       { "allow": [], "deny": ["198.51.100.0/24"] },
-    "unHost":         { "allow": ["203.0.113.7"], "deny": [] },
-    "anchoV4":        { "allow": ["198.51.100.0/25"], "deny": ["198.51.100.0/24"] },
-    "v6":             { "allow": ["2001:db8:a::/48"], "deny": ["2001:db8:a:dead::/64"] },
-    "mixto":          { "allow": ["192.0.2.0/24", "2001:db8::/32"], "deny": ["192.0.2.66"] }
+    "basico": {
+      "allow": [
+        "198.51.100.64/26"
+      ],
+      "deny": [
+        "198.51.100.96/27"
+      ]
+    },
+    "rangoCompleto": {
+      "allow": [
+        "203.0.113.0/24"
+      ],
+      "deny": []
+    },
+    "vacio": {
+      "allow": [],
+      "deny": []
+    },
+    "soloDeny": {
+      "allow": [],
+      "deny": [
+        "198.51.100.0/24"
+      ]
+    },
+    "unHost": {
+      "allow": [
+        "203.0.113.7"
+      ],
+      "deny": []
+    },
+    "anchoV4": {
+      "allow": [
+        "198.51.100.0/24"
+      ],
+      "deny": [
+        "198.51.100.0/25"
+      ]
+    },
+    "v6": {
+      "allow": [
+        "2001:db8:a::/48"
+      ],
+      "deny": [
+        "2001:db8:a:dead::/64"
+      ]
+    },
+    "mixto": {
+      "allow": [
+        "192.0.2.0/24",
+        "2001:db8::/32"
+      ],
+      "deny": [
+        "192.0.2.66"
+      ]
+    }
   },
   "cases": [
-    { "scope": "basico", "target": "198.51.100.0",   "expect": "in" },
-    { "scope": "basico", "target": "198.51.100.1",   "expect": "in" },
-    { "scope": "basico", "target": "198.51.100.63",  "expect": "in" },
-    { "scope": "basico", "target": "198.51.100.64",  "expect": "out" },
-    { "scope": "basico", "target": "198.51.100.127", "expect": "out" },
-    { "scope": "basico", "target": "198.51.100.128", "expect": "out" },
-    { "scope": "basico", "target": "198.51.100.255", "expect": "out" },
-    { "scope": "basico", "target": "198.51.100.01",  "expect": "invalid" },
-    { "scope": "basico", "target": "198.51.100.001", "expect": "invalid" },
-    { "scope": "basico", "target": "no-soy-una-ip",  "expect": "invalid" },
-    { "scope": "basico", "target": "198.51.100.5/24","expect": "invalid" },
-    { "scope": "basico", "target": "198.51.100",     "expect": "invalid" },
-    { "scope": "basico", "target": "198.51.100.256", "expect": "invalid" },
-    { "scope": "basico", "target": "",               "expect": "invalid" },
-    { "scope": "rangoCompleto", "target": "203.0.113.0",   "expect": "in" },
-    { "scope": "rangoCompleto", "target": "203.0.113.255", "expect": "in" },
-    { "scope": "vacio",    "target": "198.51.100.5",   "expect": "empty-scope" },
-    { "scope": "soloDeny", "target": "203.0.113.9",    "expect": "empty-scope" },
-    { "scope": "soloDeny", "target": "198.51.100.5",   "expect": "empty-scope" },
-    { "scope": "unHost",   "target": "203.0.113.7",    "expect": "in" },
-    { "scope": "unHost",   "target": "203.0.113.8",    "expect": "out" },
-    { "scope": "anchoV4",  "target": "198.51.100.5",   "expect": "out" },
-    { "scope": "v6", "target": "2001:db8:a::1", "expect": "in" },
-    { "scope": "v6", "target": "2001:0db8:000a:0000:0000:0000:0000:0001", "expect": "in" },
-    { "scope": "v6", "target": "2001:DB8:A::1", "expect": "in" },
-    { "scope": "v6", "target": "2001:db8:a::203.0.113.5", "expect": "in" },
-    { "scope": "v6", "target": "2001:db8:a:dead::1", "expect": "out" },
-    { "scope": "v6", "target": "2001:db8:b::1", "expect": "out" },
-    { "scope": "v6", "target": "192.0.2.1", "expect": "out" },
-    { "scope": "v6", "target": "2001:db8:a:::1", "expect": "invalid" },
-    { "scope": "mixto", "target": "192.0.2.65",  "expect": "in" },
-    { "scope": "mixto", "target": "192.0.2.66",  "expect": "out" },
-    { "scope": "mixto", "target": "::ffff:192.0.2.65", "expect": "in" },
-    { "scope": "mixto", "target": "::ffff:192.0.2.66", "expect": "out" },
-    { "scope": "mixto", "target": "2001:db8::5", "expect": "in" }
+    {
+      "scope": "basico",
+      "target": "198.51.100.63",
+      "expect": "out"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.64",
+      "expect": "in"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.65",
+      "expect": "in"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.95",
+      "expect": "in"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.96",
+      "expect": "out"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.127",
+      "expect": "out"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.128",
+      "expect": "out"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.0",
+      "expect": "out"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.01",
+      "expect": "invalid"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.001",
+      "expect": "invalid"
+    },
+    {
+      "scope": "basico",
+      "target": "no-soy-una-ip",
+      "expect": "invalid"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.5/24",
+      "expect": "invalid"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100",
+      "expect": "invalid"
+    },
+    {
+      "scope": "basico",
+      "target": "198.51.100.256",
+      "expect": "invalid"
+    },
+    {
+      "scope": "basico",
+      "target": "",
+      "expect": "invalid"
+    },
+    {
+      "scope": "anchoV4",
+      "target": "198.51.100.5",
+      "expect": "out"
+    },
+    {
+      "scope": "anchoV4",
+      "target": "198.51.100.200",
+      "expect": "in"
+    },
+    {
+      "scope": "rangoCompleto",
+      "target": "203.0.113.0",
+      "expect": "in"
+    },
+    {
+      "scope": "rangoCompleto",
+      "target": "203.0.113.255",
+      "expect": "in"
+    },
+    {
+      "scope": "vacio",
+      "target": "198.51.100.5",
+      "expect": "empty-scope"
+    },
+    {
+      "scope": "soloDeny",
+      "target": "203.0.113.9",
+      "expect": "empty-scope"
+    },
+    {
+      "scope": "soloDeny",
+      "target": "198.51.100.5",
+      "expect": "empty-scope"
+    },
+    {
+      "scope": "unHost",
+      "target": "203.0.113.7",
+      "expect": "in"
+    },
+    {
+      "scope": "unHost",
+      "target": "203.0.113.8",
+      "expect": "out"
+    },
+    {
+      "scope": "v6",
+      "target": "2001:db8:a::1",
+      "expect": "in"
+    },
+    {
+      "scope": "v6",
+      "target": "2001:0db8:000a:0000:0000:0000:0000:0001",
+      "expect": "in"
+    },
+    {
+      "scope": "v6",
+      "target": "2001:DB8:A::1",
+      "expect": "in"
+    },
+    {
+      "scope": "v6",
+      "target": "2001:db8:a::203.0.113.5",
+      "expect": "in"
+    },
+    {
+      "scope": "v6",
+      "target": "2001:db8:a:dead::1",
+      "expect": "out"
+    },
+    {
+      "scope": "v6",
+      "target": "2001:db8:b::1",
+      "expect": "out"
+    },
+    {
+      "scope": "v6",
+      "target": "192.0.2.1",
+      "expect": "out"
+    },
+    {
+      "scope": "v6",
+      "target": "2001:db8:a:::1",
+      "expect": "invalid"
+    },
+    {
+      "scope": "mixto",
+      "target": "192.0.2.65",
+      "expect": "in"
+    },
+    {
+      "scope": "mixto",
+      "target": "192.0.2.66",
+      "expect": "out"
+    },
+    {
+      "scope": "mixto",
+      "target": "::ffff:192.0.2.65",
+      "expect": "in"
+    },
+    {
+      "scope": "mixto",
+      "target": "::ffff:192.0.2.66",
+      "expect": "out"
+    },
+    {
+      "scope": "mixto",
+      "target": "2001:db8::5",
+      "expect": "in"
+    }
   ],
   "entries": [
-    { "input": "198.51.100.0/24",      "expect": "ok" },
-    { "input": "203.0.113.7",          "expect": "ok" },
-    { "input": "2001:db8::/32",        "expect": "ok" },
-    { "input": "2001:db8::1",          "expect": "ok" },
-    { "input": "::ffff:192.0.2.0/120", "expect": "ok" },
-    { "input": "198.51.100.5/24",      "expect": "ambiguous" },
-    { "input": "192.0.2.130/25",       "expect": "ambiguous" },
-    { "input": "2001:db8::1/32",       "expect": "ambiguous" },
-    { "input": "::ffff:192.0.2.65/120","expect": "ambiguous" },
-    { "input": "0.0.0.0/0",            "expect": "overbroad" },
-    { "input": "::/0",                 "expect": "overbroad" },
-    { "input": "198.51.100.0/33",      "expect": "invalid" },
-    { "input": "::ffff:192.0.2.0/64",  "expect": "invalid" },
-    { "input": "192.0.2.0/032",        "expect": "invalid" },
-    { "input": "192.0.2.01",           "expect": "invalid" },
-    { "input": "no-soy-una-red",       "expect": "invalid" },
-    { "input": "",                     "expect": "invalid" }
+    {
+      "input": "198.51.100.0/24",
+      "expect": "ok"
+    },
+    {
+      "input": "203.0.113.7",
+      "expect": "ok"
+    },
+    {
+      "input": "2001:db8::/32",
+      "expect": "ok"
+    },
+    {
+      "input": "2001:db8::1",
+      "expect": "ok"
+    },
+    {
+      "input": "::ffff:192.0.2.0/120",
+      "expect": "ok"
+    },
+    {
+      "input": "198.51.100.5/24",
+      "expect": "ambiguous"
+    },
+    {
+      "input": "192.0.2.130/25",
+      "expect": "ambiguous"
+    },
+    {
+      "input": "2001:db8::1/32",
+      "expect": "ambiguous"
+    },
+    {
+      "input": "::ffff:192.0.2.65/120",
+      "expect": "ambiguous"
+    },
+    {
+      "input": "0.0.0.0/0",
+      "expect": "overbroad"
+    },
+    {
+      "input": "::/0",
+      "expect": "overbroad"
+    },
+    {
+      "input": "198.51.100.0/33",
+      "expect": "invalid"
+    },
+    {
+      "input": "::ffff:192.0.2.0/64",
+      "expect": "invalid"
+    },
+    {
+      "input": "192.0.2.0/032",
+      "expect": "invalid"
+    },
+    {
+      "input": "192.0.2.01",
+      "expect": "invalid"
+    },
+    {
+      "input": "no-soy-una-red",
+      "expect": "invalid"
+    },
+    {
+      "input": "",
+      "expect": "invalid"
+    }
   ]
 }
