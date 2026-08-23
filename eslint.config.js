@@ -19,4 +19,13 @@ export default tseslint.config(
       "no-undef": "off",
     },
   },
+  {
+    // Los scripts de comprobación corren en Node, no en el navegador.
+    // Se declaran sus globals en vez de apagar la regla: aquí no hay
+    // TypeScript detrás que cubra los identificadores no declarados.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: { process: "readonly", console: "readonly" },
+    },
+  },
 );

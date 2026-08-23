@@ -11,7 +11,10 @@
     "lint": "eslint .",
     "test": "vitest run",
     "check:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run check:rust"
+    "check": "npm run typecheck && npm run lint && npm run test && npm run check:rust && npm run check:fixtures && npm run check:nohttp && npm run check:i18n",
+    "check:fixtures": "node scripts/checks/fixtures.mjs",
+    "check:nohttp": "node scripts/checks/no-http-client.mjs",
+    "check:i18n": "node scripts/checks/i18n-parity.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
