@@ -64,7 +64,9 @@ describe("comprobación de fixtures", () => {
     // 192.0.2. no puede casar por prefijo con 192.0.20.5 porque termina
     // en punto. Este test lo fija por si alguien quita el punto.
     expect(findForbiddenAddresses("192.0.20.5")).toContain("192.0.20.5");
-    expect(findForbiddenAddresses("203.0.1130.5")).toEqual([]); // ni siquiera es una IPv4
+    // 192.0.29.5 sí es una IPv4 válida y comparte los primeros caracteres
+    // con el prefijo permitido: es el caso que de verdad ejercita startsWith.
+    expect(findForbiddenAddresses("192.0.29.5")).toContain("192.0.29.5");
   });
 
   it("caza la parte IPv4 de una mapeada prohibida", () => {
@@ -91,6 +93,14 @@ describe("comprobación de cliente HTTP", () => {
     // transitivas, que son la vía más probable de entrada.
     expect(
       findHttpClients('"node_modules/foo/node_modules/axios": { "version": "1.0.0" }'),
+    ).toContain("axios");
+  });
+
+  it("detecta un cliente HTTP escondido tras un alias de npm", () => {
+    // Regresión introducida al arreglar lo anterior: anclar a la ruta
+    // perdía el caso en que el paquete se instala con otro nombre.
+    expect(
+      findHttpClients('"node_modules/mi-http": { "name": "axios", "version": "1.0.0" }'),
     ).toContain("axios");
   });
 

@@ -14,12 +14,20 @@
 const PROHIBIDOS_JS = ["axios", "node-fetch"];
 export const PROHIBIDOS_RUST = ["reqwest", "ureq", "isahc"];
 
-/// Las claves de package-lock.json anidan: "node_modules/a/node_modules/axios".
-/// Anclar al principio se dejaría fuera las transitivas, que son la vía más
-/// probable por la que entraría un cliente HTTP sin querer.
+/// Tres formas en que un cliente HTTP aparece en package-lock.json:
+///   1. como ruta, incluidas las transitivas anidadas
+///      "node_modules/foo/node_modules/axios"
+///   2. como clave suelta en el formato antiguo
+///   3. bajo un alias, donde la ruta lleva otro nombre y el paquete real
+///      aparece en el campo "name": {"node_modules/mi-http": {"name": "axios"}}
+/// La tercera se perdió al arreglar la primera; sin ella, renombrar la
+/// dependencia bastaría para esquivar el check.
 export function findHttpClients(lockText) {
   return PROHIBIDOS_JS.filter((p) =>
-    new RegExp(`"[^"]*node_modules/${p}"|^\\s*"${p}":`, "m").test(lockText),
+    new RegExp(
+      `"[^"]*node_modules/${p}"|^\\s*"${p}":|"name":\\s*"${p}"`,
+      "m",
+    ).test(lockText),
   );
 }
 
