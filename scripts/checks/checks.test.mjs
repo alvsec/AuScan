@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import { findForbiddenAddresses } from "./fixtures.mjs";
 import { keyDiff } from "./i18n-parity.mjs";
-import { crateEnElGrafo, findHttpClients } from "./no-http-client.mjs";
+import {
+  cratesEnElGrafo,
+  findHttpClients,
+  findRustHttpClients,
+} from "./no-http-client.mjs";
 
 describe("comprobación de fixtures", () => {
   it("acepta los rangos de documentación", () => {
@@ -50,6 +54,24 @@ describe("comprobación de fixtures", () => {
     expect(primera).toEqual([]);
   });
 
+  it("caza una IPv6 prohibida aunque sea puramente numérica", () => {
+    // Regresión: el patrón exigía una letra hexadecimal para no confundirse
+    // con las horas, y así 2620:100:6000::1 se colaba entero.
+    expect(findForbiddenAddresses("2620:100:6000::1")).toContain("2620:100:6000::1");
+  });
+
+  it("no confunde el prefijo permitido con uno más largo", () => {
+    // 192.0.2. no puede casar por prefijo con 192.0.20.5 porque termina
+    // en punto. Este test lo fija por si alguien quita el punto.
+    expect(findForbiddenAddresses("192.0.20.5")).toContain("192.0.20.5");
+    expect(findForbiddenAddresses("203.0.1130.5")).toEqual([]); // ni siquiera es una IPv4
+  });
+
+  it("caza la parte IPv4 de una mapeada prohibida", () => {
+    expect(findForbiddenAddresses("::ffff:192.168.1.1")).toContain("192.168.1.1");
+    expect(findForbiddenAddresses("::ffff:192.0.2.65")).toEqual([]);
+  });
+
   it("acepta el corpus real del repositorio", async () => {
     const { readFileSync } = await import("node:fs");
     const corpus = readFileSync("fixtures/scope/corpus.json", "utf8");
@@ -64,14 +86,35 @@ describe("comprobación de cliente HTTP", () => {
     );
   });
 
+  it("detecta un cliente HTTP anidado como dependencia transitiva", () => {
+    // Regresión: anclar al principio de la clave dejaba fuera las
+    // transitivas, que son la vía más probable de entrada.
+    expect(
+      findHttpClients('"node_modules/foo/node_modules/axios": { "version": "1.0.0" }'),
+    ).toContain("axios");
+  });
+
+  it("no se inventa hallazgos en el package-lock real del repo", async () => {
+    const { readFileSync } = await import("node:fs");
+    expect(findHttpClients(readFileSync("package-lock.json", "utf8"))).toEqual([]);
+  });
+
   it("no se inventa hallazgos", () => {
     expect(findHttpClients('"node_modules/zustand": {}')).toEqual([]);
   });
 
-  it("interpreta la salida vacía de cargo tree como ausencia", () => {
-    expect(crateEnElGrafo("")).toBe(false);
-    expect(crateEnElGrafo("   \n  ")).toBe(false);
-    expect(crateEnElGrafo("reqwest v0.12.0\n└── tauri v2.0.0")).toBe(true);
+  it("lee el grafo de cargo tree quitando el sufijo de deduplicado", () => {
+    const salida = "serde\naho_corasick (*)\nrusqlite\n";
+    expect(cratesEnElGrafo(salida)).toEqual(new Set(["serde", "aho_corasick", "rusqlite"]));
+  });
+
+  it("encuentra un crate prohibido en el grafo y no se lo inventa", () => {
+    expect(findRustHttpClients("serde\nreqwest\ntauri\n")).toEqual(["reqwest"]);
+    expect(findRustHttpClients("serde\nrusqlite\ntauri\n")).toEqual([]);
+  });
+
+  it("normaliza guiones y guiones bajos entre nombre de crate y de lib", () => {
+    expect(findRustHttpClients("mi_cliente\n", ["mi-cliente"])).toEqual(["mi-cliente"]);
   });
 });
 

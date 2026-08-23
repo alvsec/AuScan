@@ -14,14 +14,20 @@ const RE_MAC = /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b/gi;
 // Una MAC suelta, sin flag /g: .test() sobre una expresión global mantiene
 // lastIndex entre llamadas y devuelve resultados alternos.
 const RE_MAC_UNA = /^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/i;
-// El lookahead exige al menos una letra hexadecimal, lo que descarta las
-// horas de las marcas de tiempo ISO (10:00:00) sin necesidad de listarlas.
-// Limitación conocida y aceptada: una IPv6 puramente numérica se escapa.
-// Los nombres de host tampoco se comprueban aquí — un patrón lo bastante
-// amplio para pillar srv.cliente.com también pilla package.json y v1.2.3,
-// y un check que cría lobos deja de leerse. Van por revisión, y así se
-// dice en SECURITY.md.
-const RE_V6 = /\b(?=[0-9a-f:]*[a-f])[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\b/gi;
+// Los nombres de host NO se comprueban aquí: un patrón lo bastante amplio
+// para pillar srv.cliente.com también pilla package.json y v1.2.3, y un
+// check que cría lobos deja de leerse. Van por revisión, y así se dice en
+// SECURITY.md.
+// El primer grupo no puede ir vacío: permitiéndolo, el patrón casaba
+// ":00:" dentro de 2026-08-22T10:00:00Z. Como efecto, las formas que
+// empiezan por "::" (::1, ::ffff:a.b.c.d) no las ve este patrón — las
+// primeras son benignas y en las segundas la parte IPv4 la caza RE_V4.
+const RE_V6 = /\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b/gi;
+// Las horas de las marcas de tiempo ISO (10:00:00) casan con el patrón de
+// IPv6. Se descartan por forma en vez de exigir una letra hexadecimal en el
+// token, que era como una IPv6 puramente numérica (2620:100:6000::1) se
+// colaba sin que nadie la viera.
+const RE_HORA = /^\d{1,2}:\d{2}:\d{2}$/;
 
 export function findForbiddenAddresses(text) {
   const malas = [];
@@ -43,6 +49,7 @@ export function findForbiddenAddresses(text) {
   for (const m of text.matchAll(RE_V6)) {
     const token = m[0];
     if (RE_MAC_UNA.test(token)) continue;
+    if (RE_HORA.test(token)) continue;
     // 2001:db8::/32 admite tanto la forma corta como 2001:0db8.
     if (/^2001:0{0,3}db8:/i.test(token)) continue;
     malas.push(token);
