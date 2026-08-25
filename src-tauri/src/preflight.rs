@@ -223,4 +223,20 @@ mod tests {
             "winget install -e Example.FakeTool"
         );
     }
+
+    #[test]
+    fn install_argv_construye_brew_o_winget_segun_la_plataforma() {
+        let hint = InstallHint {
+            brew: &["install", "fake-tool"],
+            winget: &["install", "-e", "X"],
+        };
+        assert_eq!(
+            install_argv(&hint, Platform::Macos),
+            ("brew", vec!["install", "fake-tool"])
+        );
+        assert_eq!(
+            install_argv(&hint, Platform::Windows),
+            ("winget", vec!["install", "-e", "X"])
+        );
+    }
 }

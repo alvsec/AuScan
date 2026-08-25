@@ -80,22 +80,3 @@ fn prueba_todos_los_binarios_del_descriptor_hasta_encontrar_uno() {
     );
     assert!(matches!(estado, ToolStatus::Ok { .. }));
 }
-
-#[test]
-fn run_install_ejecuta_el_comando_de_la_plataforma_actual() {
-    // No se afirma la salida exacta de brew/winget (no están garantizados
-    // en la máquina que corre el test): se afirma que el mecanismo de
-    // spawn con argv+plataforma funciona, usando un hint fabricado que
-    // apunta a un binario que sí existe en cualquier plataforma de CI.
-    // brew/winget de verdad no se invocan aquí.
-    let hint = auscan_lib::adapters::InstallHint {
-        brew: &["hola"],
-        winget: &["hola"],
-    };
-    // run_install siempre llama a "brew" o "winget" según la plataforma;
-    // este test solo comprueba que el resultado es un Output válido
-    // cuando el binario existe, o un error de "no encontrado" cuando no
-    // — nunca un pánico.
-    let r = auscan_lib::preflight::run_install(&hint, auscan_lib::preflight::current_platform());
-    assert!(r.is_ok() || r.is_err());
-}
