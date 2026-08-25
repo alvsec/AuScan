@@ -121,6 +121,49 @@ pub fn running_privileged() -> bool {
     }
 }
 
+use crate::adapters::InstallHint;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Macos,
+    Windows,
+}
+
+pub fn current_platform() -> Platform {
+    #[cfg(target_os = "windows")]
+    {
+        Platform::Windows
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Platform::Macos
+    }
+}
+
+pub fn install_display_command(hint: &InstallHint, platform: Platform) -> String {
+    match platform {
+        Platform::Macos => format!("brew {}", hint.brew.join(" ")),
+        Platform::Windows => format!("winget {}", hint.winget.join(" ")),
+    }
+}
+
+fn install_argv(hint: &InstallHint, platform: Platform) -> (&'static str, Vec<&'static str>) {
+    match platform {
+        Platform::Macos => ("brew", hint.brew.to_vec()),
+        Platform::Windows => ("winget", hint.winget.to_vec()),
+    }
+}
+
+/// Ejecuta el comando de instalación. Se llama solo tras confirmación
+/// explícita del operador — nunca automáticamente.
+pub fn run_install(
+    hint: &InstallHint,
+    platform: Platform,
+) -> std::io::Result<std::process::Output> {
+    let (program, args) = install_argv(hint, platform);
+    std::process::Command::new(program).args(args).output()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +197,30 @@ mod tests {
         assert_eq!(
             parse_filevault_status("FILEVAULT IS ON."),
             FileVaultStatus::On
+        );
+    }
+
+    #[test]
+    fn el_comando_de_macos_usa_brew() {
+        let hint = InstallHint {
+            brew: &["install", "fake-tool"],
+            winget: &["install", "-e", "X"],
+        };
+        assert_eq!(
+            install_display_command(&hint, Platform::Macos),
+            "brew install fake-tool"
+        );
+    }
+
+    #[test]
+    fn el_comando_de_windows_usa_winget() {
+        let hint = InstallHint {
+            brew: &["install", "fake-tool"],
+            winget: &["install", "-e", "Example.FakeTool"],
+        };
+        assert_eq!(
+            install_display_command(&hint, Platform::Windows),
+            "winget install -e Example.FakeTool"
         );
     }
 }
