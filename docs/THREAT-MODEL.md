@@ -72,15 +72,38 @@ exigen privilegios, y el núcleo rechazará antes de lanzar cualquier argv que s
 salga. Añadir una capacidad activa obliga así a tocar una lista corta y visible,
 que aparece señalada en el diff.
 
-**Estado:** pendiente. Llega con el trait de adaptador, en el plan siguiente.
+`exec.rs` encadena tres comprobaciones puras —`validate_targets`,
+`validate_flags` y `validate_binary`, combinadas en `verja()`— que correrán
+antes de cualquier `spawn` real en cuanto la Fase 5 conecte la ejecución.
+`adapters::registry()` sigue vacío hoy, así que ninguna herramienta puede
+lanzarse todavía, pero la verja en sí ya existe y está testeada de punta a
+punta.
+
+**Límite conocido:** el emparejamiento por prefijo de `validate_flags` tiene
+un hueco identificado en esta revisión —no es una lista verdaderamente
+cerrada (p. ej. `-pwn` casaría con `-p`), y una dirección sin validar podría
+colarse pegada a una bandera permitida—. Sigue abierto, en seguimiento para
+cerrarse antes de que aterrice el adaptador de nmap en la Fase 4.
+
+**Dónde:** `src-tauri/src/exec.rs` · `src-tauri/tests/exec_gate.rs`
 
 ### T5 · Binario suplantado
 
-La ruta del binario se resuelve en el preflight y se revalida su versión antes de
-cada ejecución. Ni `PATH`, ni un `nmap` aparecido en el directorio actual entre
-el arranque y la ejecución.
+`preflight.rs` resuelve la ruta de cada herramienta buscándola en `PATH`
+(crate `which`) y compara la versión que reporta contra el mínimo exigido
+(`check_tool`). Después, `validate_binary` en `exec.rs` exige que el binario
+que de verdad se va a ejecutar sea el mismo path, byte a byte, que preflight
+resolvió — así un `nmap` aparecido en el directorio actual entre el arranque
+y la ejecución no puede colarse.
 
-**Estado:** pendiente. Llega con el preflight.
+**Límite conocido:** `validate_binary` hoy solo compara dos rutas por
+igualdad exacta; no vuelve a comprobar la versión del binario justo antes de
+cada ejecución, que es lo que esta mitigación prometía originalmente.
+Revalidar la versión en el momento de ejecutar sigue siendo un requisito
+explícito para la Fase 5, cuando se conecte el lanzamiento de procesos real,
+y todavía no está implementado.
+
+**Dónde:** `src-tauri/src/preflight.rs` · `src-tauri/src/exec.rs`
 
 ### T6 · Inyección de comandos
 

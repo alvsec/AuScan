@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use crate::adapters::ToolAdapter;
+use crate::error::{AppError, Result};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -164,6 +165,22 @@ pub fn run_install(
     std::process::Command::new(program).args(args).output()
 }
 
+/// A partir de la salida cruda de un proceso de instalación, decide si
+/// fue un éxito (devuelve su stdout) o un fallo (devuelve el error con
+/// código de salida y stderr). Función pura: no ejecuta nada, solo
+/// interpreta un `Output` ya obtenido.
+pub fn interpret_install_output(tool_id: &str, salida: std::process::Output) -> Result<String> {
+    if salida.status.success() {
+        Ok(String::from_utf8_lossy(&salida.stdout).into_owned())
+    } else {
+        Err(AppError::InstallFailed {
+            tool: tool_id.to_string(),
+            code: salida.status.code(),
+            stderr: String::from_utf8_lossy(&salida.stderr).into_owned(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolReport {
@@ -288,5 +305,77 @@ mod tests {
             install_argv(&hint, Platform::Windows),
             ("winget", vec!["install", "-e", "X"])
         );
+    }
+
+    // `interpret_install_output` es la lógica de decisión que antes vivía
+    // sin tests dentro del comando Tauri `preflight_install`. No probamos
+    // `run_install` en sí (llama a `brew`/`winget` de verdad — ver el
+    // commit "eliminar test de run_install que ejecuta procesos reales");
+    // en cambio, construimos un `std::process::Output` real pero inocuo
+    // ejecutando `sh`/`cmd` con un script trivial, y comprobamos que la
+    // función pura lo interpreta bien. Es más simple y portable entre
+    // macOS y Windows (donde corre CI) que fabricar a mano un
+    // `ExitStatus`, que no tiene constructor público estable y cuya
+    // codificación en crudo difiere por plataforma.
+    #[cfg(unix)]
+    fn salida_de_exito_con_stdout() -> std::process::Output {
+        std::process::Command::new("sh")
+            .args(["-c", "echo hola-de-prueba"])
+            .output()
+            .expect("no se pudo ejecutar sh para la prueba")
+    }
+
+    #[cfg(windows)]
+    fn salida_de_exito_con_stdout() -> std::process::Output {
+        std::process::Command::new("cmd")
+            .args(["/C", "echo hola-de-prueba"])
+            .output()
+            .expect("no se pudo ejecutar cmd para la prueba")
+    }
+
+    #[cfg(unix)]
+    fn salida_de_fallo_con_stderr() -> std::process::Output {
+        std::process::Command::new("sh")
+            .args(["-c", "echo fallo-de-prueba 1>&2; exit 7"])
+            .output()
+            .expect("no se pudo ejecutar sh para la prueba")
+    }
+
+    #[cfg(windows)]
+    fn salida_de_fallo_con_stderr() -> std::process::Output {
+        std::process::Command::new("cmd")
+            .args(["/C", "echo fallo-de-prueba 1>&2 & exit 7"])
+            .output()
+            .expect("no se pudo ejecutar cmd para la prueba")
+    }
+
+    #[test]
+    fn interpret_install_output_devuelve_ok_con_el_stdout_cuando_el_proceso_tiene_exito() {
+        let salida = salida_de_exito_con_stdout();
+        let resultado = interpret_install_output("fake", salida);
+        assert_eq!(resultado.unwrap().trim(), "hola-de-prueba");
+    }
+
+    #[test]
+    fn interpret_install_output_devuelve_installfailed_con_el_codigo_cuando_el_proceso_falla() {
+        let salida = salida_de_fallo_con_stderr();
+        match interpret_install_output("fake", salida) {
+            Err(AppError::InstallFailed { tool, code, .. }) => {
+                assert_eq!(tool, "fake");
+                assert_eq!(code, Some(7));
+            }
+            otro => panic!("se esperaba InstallFailed, fue {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn interpret_install_output_captura_el_stderr_cuando_el_proceso_falla() {
+        let salida = salida_de_fallo_con_stderr();
+        match interpret_install_output("fake", salida) {
+            Err(AppError::InstallFailed { stderr, .. }) => {
+                assert!(stderr.contains("fallo-de-prueba"));
+            }
+            otro => panic!("se esperaba InstallFailed, fue {otro:?}"),
+        }
     }
 }

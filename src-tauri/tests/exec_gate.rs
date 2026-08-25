@@ -182,3 +182,25 @@ fn verja_encadena_las_tres_comprobaciones_en_orden() {
     inv_mal.argv.push("198.51.100.200".to_string());
     assert!(verja(&inv_mal, bin, &d, bin).is_err());
 }
+
+#[test]
+fn verja_acepta_un_objetivo_autorizado_con_espacios_alrededor() {
+    let scope = scope_198();
+    let target = scope.validate("198.51.100.5").unwrap();
+    let d = descriptor_de_prueba();
+    let bin = Path::new("/opt/homebrew/bin/fake-tool");
+    let inv = auscan_lib::adapters::Invocation {
+        phase: auscan_lib::adapters::Phase::Discovery,
+        argv: vec!["-t".to_string(), " 198.51.100.5 ".to_string()],
+        targets: vec![target],
+        needs_privilege: false,
+        raw_from: auscan_lib::adapters::RawSource::Stdout,
+        progress_from: auscan_lib::adapters::ProgressSource::None,
+        stdin: None,
+        timeout: std::time::Duration::from_secs(5),
+    };
+    assert!(
+        verja(&inv, bin, &d, bin).is_ok(),
+        "un objetivo autorizado con espacios no debe rechazarse por la verja combinada"
+    );
+}

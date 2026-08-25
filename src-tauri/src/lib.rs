@@ -113,7 +113,7 @@ fn preflight_install(tool_id: String) -> Result<String> {
         &adaptador.descriptor().install_hint,
         preflight::current_platform(),
     )?;
-    Ok(String::from_utf8_lossy(&salida.stdout).into_owned())
+    preflight::interpret_install_output(&tool_id, salida)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

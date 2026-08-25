@@ -32,7 +32,11 @@ parte de la siguiente fase**: hoy esas columnas existen y están vacías.
 
 En construcción. Ahora mismo existe la fundación: modelo de datos, ciclo de vida
 del engagement, purga verificable y el guard de alcance completo con sus tests.
-**Todavía no lanza ninguna herramienta** — esa es la siguiente fase.
+**Todavía no lanza ninguna herramienta de auditoría** — eso llega en las Fases
+4 y 5. El preflight sí ejecuta ya comandos propios, locales y de solo lectura
+(la versión de cada herramienta instalada, `fdesetup status` para FileVault)
+para informar al operador antes de empezar; ninguno es una herramienta de red
+ni forma parte de una auditoría.
 
 ## Cómo está construido
 
@@ -92,10 +96,16 @@ nmap corre como root y la app no, la app no puede matarlo.
 
 Sin telemetría, sin cuentas, sin servidor. **La app no abre ninguna conexión de
 red por su cuenta**: las conexiones contra el alcance las hacen las herramientas
-que lanza. La única excepción prevista es la resolución de nombres, y solo
-cuando lances una ejecución contra un objetivo escrito como nombre en vez de
-como IP; la comprobación de alcance de la pantalla acepta solo direcciones
-literales precisamente para no convertirse en un canal de salida.
+que lanza. Dos excepciones previstas, las dos explícitas y acotadas:
+
+- La resolución de nombres, solo cuando lances una ejecución contra un
+  objetivo escrito como nombre en vez de como IP; la comprobación de alcance
+  de la pantalla acepta solo direcciones literales precisamente para no
+  convertirse en un canal de salida.
+- La instalación de una herramienta que falte: usa el gestor de paquetes del
+  propio sistema (`brew install` en macOS, `winget install` en Windows), lo
+  que implica descarga por red, pero solo cuando el operador confirma
+  expresamente instalarla — nunca automática, nunca silenciosa.
 
 Cada engagement vive en su propio directorio, con su base y su salida cruda
 dentro. Purgar es borrar ese directorio y comprobar que no queda nada — un test

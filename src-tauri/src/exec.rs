@@ -46,13 +46,23 @@ pub fn validate_targets(argv: &[String], targets: &[ScopedTarget]) -> Result<()>
 /// dirección) se ignoran aquí: lo que queda son banderas. El
 /// emparejamiento es por prefijo, no exacto, porque una bandera puede
 /// llevar un valor pegado (`-PS80,443,22` casa con el flag `-PS`).
+///
+/// **Límite conocido:** `invocation_privileged` lo pone quien llama, a
+/// partir de `Invocation.needs_privilege` — y ese campo hoy lo fija el
+/// propio adaptador, sin que nada lo verifique contra el privilegio real
+/// del proceso (`preflight::running_privileged()` o equivalente). Es un
+/// hueco identificado y en seguimiento: antes de que la Fase 5 conecte la
+/// ejecución real, quien llame a `verja()` debe pasar un valor derivado
+/// del privilegio efectivo, no de lo que el propio adaptador declare de sí
+/// mismo — si no, un adaptador con un bug (o malicioso) podría marcar
+/// `needs_privilege` y pasar esta comprobación corriendo sin privilegios.
 pub fn validate_flags(
     argv: &[String],
     descriptor: &ToolDescriptor,
     invocation_privileged: bool,
 ) -> Result<()> {
     for token in argv {
-        if token.parse::<IpAddr>().is_ok() {
+        if token.trim().parse::<IpAddr>().is_ok() {
             continue;
         }
         let flag = descriptor

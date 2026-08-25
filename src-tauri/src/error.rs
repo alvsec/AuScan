@@ -55,6 +55,13 @@ pub enum AppError {
     #[error("no se encontró la herramienta {0} en el registro")]
     ToolNotFound(String),
 
+    #[error("la instalación de {tool} falló (código {code:?}): {stderr}")]
+    InstallFailed {
+        tool: String,
+        code: Option<i32>,
+        stderr: String,
+    },
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 

@@ -33,9 +33,11 @@ pub enum Phase {
 
 /// Una bandera que un adaptador puede añadir a su argv.
 ///
-/// `needs_privilege` es lo que convierte la regla "solo detección" en
-/// mecánico: una bandera marcada no arranca sin la ruta privilegiada,
-/// sin importar lo que decida el adaptador en tiempo de ejecución.
+/// `needs_privilege` es la señal que la Fase 5 debe comparar contra el
+/// privilegio real de la ejecución (no contra lo que la propia invocación
+/// declare de sí misma) antes de lanzar cualquier proceso — ver el
+/// comentario de `validate_flags` en exec.rs para el estado actual de esa
+/// comprobación.
 #[derive(Debug, Clone, Copy)]
 pub struct Flag {
     pub name: &'static str,
