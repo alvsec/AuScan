@@ -23,6 +23,9 @@ pub enum AppError {
     #[error("la entrada de alcance {0} no existe")]
     ScopeEntryNotFound(i64),
 
+    #[error("objetivo sin validar en el comando: {0}")]
+    UnvalidatedTarget(String),
+
     #[error("dirección o rango no válido: {0}")]
     InvalidAddress(String),
 

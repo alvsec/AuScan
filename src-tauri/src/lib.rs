@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod db;
 pub mod engagement;
 pub mod error;
+pub mod exec;
 pub mod paths;
 pub mod scope;
 pub mod state;
