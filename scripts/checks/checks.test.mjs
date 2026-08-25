@@ -3,7 +3,7 @@
 // `scripts` está en el `exclude` de tsconfig.json por lo mismo.
 import { describe, expect, it } from "vitest";
 
-import { findForbiddenAddresses } from "./fixtures.mjs";
+import { ficherosAComprobar, findForbiddenAddresses } from "./fixtures.mjs";
 import { keyDiff } from "./i18n-parity.mjs";
 import {
   cratesEnElGrafo,
@@ -74,10 +74,40 @@ describe("comprobación de fixtures", () => {
     expect(findForbiddenAddresses("::ffff:192.0.2.65")).toEqual([]);
   });
 
+  it("caza un prefijo de cliente terminado en :: seguido de /nn", () => {
+    // Regresión: el \b final del patrón no puede casar justo después de
+    // ":", así que un prefijo real de ISP como este quedaba invisible.
+    expect(findForbiddenAddresses("2a02:26f0::/32")).toContain("2a02:26f0::");
+  });
+
+  it("no confunde db::ENGAGEMENT_MIGRATIONS con una IPv6", () => {
+    // Regresión: un lookahead que solo rechazara otro carácter
+    // hexadecimal habría dejado pasar esto ("db","E" son dos grupos no
+    // vacíos, y la "N" que sigue a la "E" no es hexadecimal).
+    expect(findForbiddenAddresses("db::ENGAGEMENT_MIGRATIONS")).toEqual([]);
+    expect(findForbiddenAddresses("db::open(&p)")).toEqual([]);
+  });
+
   it("acepta el corpus real del repositorio", async () => {
     const { readFileSync } = await import("node:fs");
     const corpus = readFileSync("fixtures/scope/corpus.json", "utf8");
     expect(findForbiddenAddresses(corpus)).toEqual([]);
+  });
+});
+
+describe("lista de ficheros a comprobar", () => {
+  it("excluye los dos ficheros con vectores de prueba negativos", () => {
+    const salida = "fixtures/scope/corpus.json\nscripts/checks/checks.test.mjs\nREADME.md\n";
+    expect(ficherosAComprobar(salida)).toEqual(["fixtures/scope/corpus.json", "README.md"]);
+  });
+
+  it("excluye binarios reconocibles por extensión", () => {
+    const salida = "src-tauri/icons/32x32.png\nsrc/App.tsx\n";
+    expect(ficherosAComprobar(salida)).toEqual(["src/App.tsx"]);
+  });
+
+  it("ignora la línea vacía final de git ls-files", () => {
+    expect(ficherosAComprobar("a.txt\nb.txt\n")).toEqual(["a.txt", "b.txt"]);
   });
 });
 

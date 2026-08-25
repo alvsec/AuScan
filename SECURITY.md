@@ -50,7 +50,7 @@ Si envías un PR que añade una capacidad activa, dilo en el título.
 
 **RFC 1918 está prohibido**, aunque sea inventado: un `192.168.1.x` real y uno
 falso son indistinguibles a simple vista, y la regla solo sirve si es
-comprobable. CI la comprueba en cada push.
+comprobable. CI la comprueba en cada pull request y en cada push a main.
 
 Los **nombres de host no se comprueban automáticamente**, y es deliberado: un
 patrón lo bastante amplio para pillar `srv.cliente.com` también pilla

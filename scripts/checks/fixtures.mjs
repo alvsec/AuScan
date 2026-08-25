@@ -73,40 +73,61 @@ export function findForbiddenAddresses(text) {
   return [...new Set(malas)];
 }
 
+// Dos ficheros documentan a propósito los vectores de prueba NEGATIVOS de
+// este mismo check —tienen que contener direcciones prohibidas para poder
+// afirmar que el check las detecta— y de otro modo se denunciarían a sí
+// mismos en cada ejecución. Rutas en forma POSIX: la salida de
+// `git ls-files` ya viene así en cualquier plataforma.
+export const FICHEROS_EXENTOS = new Set([
+  "scripts/checks/checks.test.mjs",
+  "docs/superpowers/plans/2026-08-22-auscan-fundacion.md",
+]);
+
+const EXT_BINARIAS = new Set([
+  ".png", ".ico", ".icns", ".jpg", ".jpeg", ".gif", ".woff", ".woff2",
+]);
+
+/// A partir de la salida cruda de `git ls-files` (líneas separadas por
+/// "\n", posible línea vacía final), devuelve los ficheros que de verdad
+/// hay que comprobar: sin los exentos, sin binarios reconocibles por
+/// extensión. Función pura para poder testearla sin invocar a git.
+export function ficherosAComprobar(lsFilesStdout) {
+  return lsFilesStdout
+    .split("\n")
+    .filter(Boolean)
+    .filter((f) => !FICHEROS_EXENTOS.has(f))
+    .filter((f) => !EXT_BINARIAS.has(f.slice(f.lastIndexOf("."))));
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { readdirSync, readFileSync, statSync } = await import("node:fs");
-  const { join, sep } = await import("node:path");
+  const { readFileSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
 
-  // Todo el código y la documentación versionados, no una lista de
-  // directorios elegidos porque hoy están limpios: esa lista tiende a
-  // crecer sin que nadie note por qué faltaba uno. Se excluyen los
-  // directorios generados y dos ficheros nombrados explícitamente, que
-  // documentan a propósito los vectores de prueba NEGATIVOS de este mismo
-  // check —tienen que contener direcciones prohibidas para poder afirmar
-  // que el check las detecta— y que de otro modo se denunciarían a sí
-  // mismos en cada ejecución.
-  const DIRS_EXCLUIDOS = new Set([
-    "node_modules", "dist", "target", ".git", ".superpowers",
-  ]);
-  const FICHEROS_EXENTOS = new Set([
-    "scripts/checks/checks.test.mjs",
-    "docs/superpowers/plans/2026-08-22-auscan-fundacion.md",
-  ]);
+  // Se recorre lo que git tiene versionado, no el árbol de trabajo: así
+  // quedan fuera .DS_Store, gen/schemas y cualquier otro generado, sin
+  // mantener una lista de exclusiones a mano que alguien tiene que
+  // acordarse de ampliar. Si git no responde, el check falla en vez de
+  // recorrer un árbol arbitrario — mismo principio que no-http-client.mjs
+  // aplica a `cargo tree`: un check que no puede verificar tiene que
+  // decirlo, no pasar en silencio.
+  let salida;
+  try {
+    salida = execFileSync("git", ["ls-files"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    console.error(`no se pudo listar los ficheros versionados: ${e.message}`);
+    process.exit(2);
+  }
 
-  const ficheros = [];
-  const recorrer = (d) => {
-    for (const e of readdirSync(d)) {
-      if (DIRS_EXCLUIDOS.has(e)) continue;
-      const p = join(d, e);
-      // join() usa "\" en Windows; los nombres en FICHEROS_EXENTOS están
-      // en forma POSIX, así que la comparación se hace sobre la ruta
-      // normalizada, no sobre la nativa de la plataforma.
-      const relativa = p.split(sep).join("/");
-      if (statSync(p).isDirectory()) recorrer(p);
-      else if (!FICHEROS_EXENTOS.has(relativa)) ficheros.push(p);
-    }
-  };
-  recorrer(".");
+  const ficheros = ficherosAComprobar(salida);
+  if (ficheros.length < 10) {
+    console.error(
+      `git ls-files devolvió ${ficheros.length} ficheros: la salida no es creíble y el check no puede afirmar nada`,
+    );
+    process.exit(2);
+  }
 
   let fallos = 0;
   for (const f of ficheros) {

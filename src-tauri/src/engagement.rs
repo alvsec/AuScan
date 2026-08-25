@@ -34,12 +34,26 @@ pub fn canonical_id(id: &str) -> Result<String> {
 }
 
 pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
+    let id = Uuid::new_v4().to_string();
+    create_with_id(root, codename, &id)
+}
+
+/// El cuerpo real de `create`, con el identificador como parámetro.
+///
+/// Público solo para poder fabricar en los tests el fallo exacto que un
+/// UUID aleatorio no permite reproducir: sin controlar el id no hay forma
+/// de preparar de antemano un choque en un paso concreto (por ejemplo,
+/// que exista un directorio donde `db::open` espera un fichero) para
+/// comprobar que la limpieza cubre ese paso y no solo el último. El
+/// propio `paths::raw_dir`/`engagement_dir` sigue validando que `id` sea
+/// un UUID, así que esto no abre una vía para escribir fuera del
+/// app-data dir.
+pub fn create_with_id(root: &Path, codename: &str, id: &str) -> Result<EngagementRef> {
     let codename = codename.trim();
     if codename.is_empty() {
         return Err(AppError::InvalidCodename);
     }
 
-    let id = Uuid::new_v4().to_string();
     let created_at = db::now_iso();
 
     // Cuatro pasos pueden fallar antes de que el engagement exista de
@@ -49,8 +63,8 @@ pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
     // explícitamente, así que los cuatro comparten un único punto de
     // limpieza en vez de que solo cubriera el último paso.
     let resultado = (|| -> Result<()> {
-        std::fs::create_dir_all(paths::raw_dir(root, &id)?)?;
-        let mut conn = db::open(&paths::engagement_db_path(root, &id)?)?;
+        std::fs::create_dir_all(paths::raw_dir(root, id)?)?;
+        let mut conn = db::open(&paths::engagement_db_path(root, id)?)?;
         db::migrate(&mut conn, db::ENGAGEMENT_MIGRATIONS)?;
         conn.execute(
             "INSERT INTO engagement (id, codename, created_at, state)
@@ -69,22 +83,27 @@ pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
     })();
 
     if let Err(e) = resultado {
-        let ruta = paths::engagement_dir(root, &id)?;
-        if let Err(fallo_limpieza) = std::fs::remove_dir_all(&ruta) {
-            // No se descarta en silencio: si la limpieza falla (en
-            // Windows, por ejemplo, con un fichero todavía abierto), el
-            // huérfano queda documentado en el mensaje de error en vez de
-            // desaparecer sin que nadie se entere.
-            eprintln!(
-                "aviso: no se pudo limpiar {} tras un fallo en create: {fallo_limpieza}",
-                ruta.display()
-            );
+        let ruta = paths::engagement_dir(root, id)?;
+        // No se borra si nunca llegó a existir: distinguirlo evita avisar
+        // de un huérfano que no es tal cuando el fallo ocurrió antes de
+        // que create_dir_all creara nada.
+        if ruta.exists() {
+            if let Err(fallo_limpieza) = std::fs::remove_dir_all(&ruta) {
+                // No se descarta en silencio: si la limpieza falla (en
+                // Windows, por ejemplo, con un fichero todavía abierto),
+                // el huérfano queda documentado en el mensaje de error en
+                // vez de desaparecer sin que nadie se entere.
+                eprintln!(
+                    "aviso: no se pudo limpiar {} tras un fallo en create: {fallo_limpieza}",
+                    ruta.display()
+                );
+            }
         }
         return Err(e);
     }
 
     Ok(EngagementRef {
-        id,
+        id: id.to_string(),
         codename: codename.to_string(),
         created_at,
         state: "draft".to_string(),

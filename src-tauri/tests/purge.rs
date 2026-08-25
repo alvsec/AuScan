@@ -180,3 +180,38 @@ fn si_falla_el_alta_en_el_indice_no_queda_directorio_huerfano() {
         "no debe quedar un directorio sin referencia"
     );
 }
+
+#[test]
+fn si_falla_db_open_no_queda_directorio_huerfano() {
+    // A diferencia del test de arriba (que fuerza el fallo en el ÚLTIMO
+    // paso, el alta en el índice), este fabrica un choque en un paso
+    // intermedio: un UUID controlado permite preparar de antemano un
+    // directorio donde db::open espera abrir un fichero, algo que un
+    // Uuid::new_v4() aleatorio no deja reproducir. Es la regresión real:
+    // en la versión anterior de create(), solo el fallo del índice tenía
+    // limpieza — create_dir_all, db::open y db::migrate estaban fuera de
+    // cualquier closure de limpieza, así que un fallo ahí dejaba el
+    // directorio huérfano para siempre, invisible desde list() y por
+    // tanto imposible de purgar desde la UI.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let id = "11111111-1111-1111-1111-111111111111";
+
+    // raw/ ya existe: create_dir_all lo verá como éxito (es idempotente).
+    std::fs::create_dir_all(paths::raw_dir(root, id).unwrap()).unwrap();
+    // engagement.db es un DIRECTORIO, no un fichero: db::open no puede
+    // abrir una base de datos ahí y falla.
+    std::fs::create_dir_all(paths::engagement_db_path(root, id).unwrap()).unwrap();
+
+    let r = engagement::create_with_id(root, "CLAVEL", id);
+    assert!(r.is_err(), "db::open debe fallar sobre un directorio");
+
+    assert!(
+        !paths::engagement_dir(root, id).unwrap().exists(),
+        "el directorio fabricado para forzar el fallo debe quedar limpio"
+    );
+    assert!(
+        engagement::list(root).unwrap().is_empty(),
+        "no debe quedar ninguna fila en el índice"
+    );
+}
