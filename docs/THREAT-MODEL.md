@@ -102,8 +102,8 @@ Si `cargo` no responde, el check **sale con error** en vez de pasar en verde. Un
 check que no puede comprobar tiene que decirlo: si no, deja de comprobar sin que
 nadie se entere.
 
-La webview corre con una CSP restrictiva (`default-src 'self'`, sin
-`form-action` ni `base-uri`) y su capability concede únicamente
+La webview corre con una CSP restrictiva (`default-src 'self'`, más
+`form-action 'none'` y `base-uri 'none'`) y su capability concede únicamente
 `core:default`. No hay plugin de apertura de URLs ni de diálogos: conceder
 permisos que nadie usa solo amplía lo que alcanzaría una webview comprometida.
 

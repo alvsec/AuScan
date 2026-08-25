@@ -22,7 +22,14 @@ const RE_MAC_UNA = /^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/i;
 // ":00:" dentro de 2026-08-22T10:00:00Z. Como efecto, las formas que
 // empiezan por "::" (::1, ::ffff:a.b.c.d) no las ve este patrón — las
 // primeras son benignas y en las segundas la parte IPv4 la caza RE_V4.
-const RE_V6 = /\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b/gi;
+// Sin \b al final: un límite de palabra no puede casar justo después de
+// ":", así que un prefijo de cliente terminado en "::" seguido de "/nn"
+// quedaba invisible (dos no-palabra seguidos nunca son límite). El
+// lookahead negativo exige que lo siguiente no sea alfanumérico, no solo
+// que no sea hexadecimal: "db::ENGAGEMENT_MIGRATIONS" tiene dos grupos no
+// vacíos ("db", "E") y pasaría el filtro de abajo si solo se rechazase un
+// hexadecimal siguiente, porque la "N" que viene después no lo es.
+const RE_V6 = /\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}(?![0-9a-zA-Z])/gi;
 // Las horas de las marcas de tiempo ISO (10:00:00) casan con el patrón de
 // IPv6. Se descartan por forma en vez de exigir una letra hexadecimal en el
 // token, que era como una IPv6 puramente numérica (2001:0db8:6000::1) se
@@ -68,7 +75,7 @@ export function findForbiddenAddresses(text) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { readdirSync, readFileSync, statSync } = await import("node:fs");
-  const { join } = await import("node:path");
+  const { join, sep } = await import("node:path");
 
   // Todo el código y la documentación versionados, no una lista de
   // directorios elegidos porque hoy están limpios: esa lista tiende a
@@ -91,18 +98,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     for (const e of readdirSync(d)) {
       if (DIRS_EXCLUIDOS.has(e)) continue;
       const p = join(d, e);
+      // join() usa "\" en Windows; los nombres en FICHEROS_EXENTOS están
+      // en forma POSIX, así que la comparación se hace sobre la ruta
+      // normalizada, no sobre la nativa de la plataforma.
+      const relativa = p.split(sep).join("/");
       if (statSync(p).isDirectory()) recorrer(p);
-      else if (!FICHEROS_EXENTOS.has(p)) ficheros.push(p);
+      else if (!FICHEROS_EXENTOS.has(relativa)) ficheros.push(p);
     }
   };
   recorrer(".");
 
   let fallos = 0;
   for (const f of ficheros) {
-    const esDatos = f.startsWith("fixtures");
-    const malas = findForbiddenAddresses(readFileSync(f, "utf8"), {
-      incluirV6: esDatos,
-    });
+    const malas = findForbiddenAddresses(readFileSync(f, "utf8"));
     if (malas.length > 0) {
       console.error(`${f}: direcciones prohibidas → ${malas.join(", ")}`);
       fallos += malas.length;

@@ -42,21 +42,23 @@ pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
     let id = Uuid::new_v4().to_string();
     let created_at = db::now_iso();
 
-    // Primero el directorio y su base: si algo falla, el índice no
-    // acaba apuntando a un engagement que no existe en disco.
-    std::fs::create_dir_all(paths::raw_dir(root, &id)?)?;
-    let mut conn = db::open(&paths::engagement_db_path(root, &id)?)?;
-    db::migrate(&mut conn, db::ENGAGEMENT_MIGRATIONS)?;
-    conn.execute(
-        "INSERT INTO engagement (id, codename, created_at, state)
-         VALUES (?1, ?2, ?3, 'draft')",
-        rusqlite::params![id, codename, created_at],
-    )?;
-    drop(conn);
+    // Cuatro pasos pueden fallar antes de que el engagement exista de
+    // verdad en ambos sitios: crear el directorio, abrir su base,
+    // migrarla e insertar las dos filas. Cualquier fallo a partir de que
+    // el directorio ya esté creado deja un huérfano si no se limpia
+    // explícitamente, así que los cuatro comparten un único punto de
+    // limpieza en vez de que solo cubriera el último paso.
+    let resultado = (|| -> Result<()> {
+        std::fs::create_dir_all(paths::raw_dir(root, &id)?)?;
+        let mut conn = db::open(&paths::engagement_db_path(root, &id)?)?;
+        db::migrate(&mut conn, db::ENGAGEMENT_MIGRATIONS)?;
+        conn.execute(
+            "INSERT INTO engagement (id, codename, created_at, state)
+             VALUES (?1, ?2, ?3, 'draft')",
+            rusqlite::params![id, codename, created_at],
+        )?;
+        drop(conn);
 
-    // Si el índice falla ahora, el directorio ya existe y nadie lo
-    // referenciaría: se limpia en vez de dejar un huérfano.
-    let alta = (|| -> Result<()> {
         let index = db::open_index(root)?;
         index.execute(
             "INSERT INTO engagement_ref (id, codename, created_at, state)
@@ -65,8 +67,19 @@ pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
         )?;
         Ok(())
     })();
-    if let Err(e) = alta {
-        let _ = std::fs::remove_dir_all(paths::engagement_dir(root, &id)?);
+
+    if let Err(e) = resultado {
+        let ruta = paths::engagement_dir(root, &id)?;
+        if let Err(fallo_limpieza) = std::fs::remove_dir_all(&ruta) {
+            // No se descarta en silencio: si la limpieza falla (en
+            // Windows, por ejemplo, con un fichero todavía abierto), el
+            // huérfano queda documentado en el mensaje de error en vez de
+            // desaparecer sin que nadie se entere.
+            eprintln!(
+                "aviso: no se pudo limpiar {} tras un fallo en create: {fallo_limpieza}",
+                ruta.display()
+            );
+        }
         return Err(e);
     }
 

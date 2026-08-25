@@ -45,7 +45,8 @@ pub fn canonical_ip(ip: IpAddr) -> IpAddr {
 /// n < 96 la red desborda el rango mapeado y no representa ninguna red
 /// v4: se rechaza en vez de recortarla en silencio.
 ///
-/// Las formas compatible-v4 (`::a.b.c.d`) y NAT64 (`64:ff9b::/96`) NO se
+/// Las formas compatible-v4 (`::a.b.c.d`) y NAT64 (el prefijo bien conocido
+/// de RFC 6052) NO se
 /// convierten a propósito: `to_ipv4_mapped` devuelve None para ambas y
 /// quedan como redes v6 corrientes, que no casan con objetivos v4. Falla
 /// cerrado, que es el lado correcto en el que equivocarse.
