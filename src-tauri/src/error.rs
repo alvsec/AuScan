@@ -32,6 +32,11 @@ pub enum AppError {
     #[error("la bandera {0} exige la ruta privilegiada")]
     PrivilegeRequired(String),
 
+    #[error(
+        "el binario a ejecutar ({actual}) no coincide con el resuelto en preflight ({expected})"
+    )]
+    BinaryMismatch { expected: String, actual: String },
+
     #[error("dirección o rango no válido: {0}")]
     InvalidAddress(String),
 

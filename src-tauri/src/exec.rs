@@ -6,8 +6,9 @@
 //! ejecución es lo que las hace testeables sin lanzar ningún proceso.
 
 use std::net::IpAddr;
+use std::path::Path;
 
-use crate::adapters::ToolDescriptor;
+use crate::adapters::{Invocation, ToolDescriptor};
 use crate::error::{AppError, Result};
 use crate::scope::ScopedTarget;
 
@@ -66,5 +67,33 @@ pub fn validate_flags(
             Some(_) => {}
         }
     }
+    Ok(())
+}
+
+/// Comprobación 3 de la verja: el binario que el argv va a ejecutar es
+/// exactamente el que preflight resolvió — ni `PATH`, ni un binario
+/// aparecido en el directorio actual entre el arranque y la ejecución.
+pub fn validate_binary(binary_path: &Path, expected_path: &Path) -> Result<()> {
+    if binary_path != expected_path {
+        return Err(AppError::BinaryMismatch {
+            expected: expected_path.display().to_string(),
+            actual: binary_path.display().to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Las tres comprobaciones juntas, en el orden en que la Fase 5 las
+/// llamará antes de cada `spawn`, para todos los adaptadores, sin
+/// excepción.
+pub fn verja(
+    invocation: &Invocation,
+    binary_path: &Path,
+    descriptor: &ToolDescriptor,
+    expected_path: &Path,
+) -> Result<()> {
+    validate_targets(&invocation.argv, &invocation.targets)?;
+    validate_flags(&invocation.argv, descriptor, invocation.needs_privilege)?;
+    validate_binary(binary_path, expected_path)?;
     Ok(())
 }

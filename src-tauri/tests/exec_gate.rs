@@ -1,8 +1,10 @@
 mod common;
 
+use std::path::Path;
+
 use auscan_lib::adapters::ToolAdapter;
 use auscan_lib::error::AppError;
-use auscan_lib::exec::{validate_flags, validate_targets};
+use auscan_lib::exec::{validate_binary, validate_flags, validate_targets, verja};
 use auscan_lib::scope::{Scope, ScopeKind};
 use common::FakeAdapter;
 
@@ -137,4 +139,46 @@ fn una_bandera_con_valor_pegado_casa_por_prefijo() {
     };
     let argv = vec!["-PS80,443,22".to_string()];
     assert!(validate_flags(&argv, &d, false).is_ok());
+}
+
+#[test]
+fn acepta_cuando_el_binario_coincide_con_el_esperado() {
+    let p = Path::new("/opt/homebrew/bin/fake-tool");
+    assert!(validate_binary(p, p).is_ok());
+}
+
+#[test]
+fn rechaza_cuando_el_binario_no_coincide() {
+    let real = Path::new("/tmp/fake-tool");
+    let esperado = Path::new("/opt/homebrew/bin/fake-tool");
+    assert!(matches!(
+        validate_binary(real, esperado),
+        Err(AppError::BinaryMismatch { .. })
+    ));
+}
+
+#[test]
+fn verja_encadena_las_tres_comprobaciones_en_orden() {
+    let scope = scope_198();
+    let target = scope.validate("198.51.100.5").unwrap();
+    let d = descriptor_de_prueba();
+    let bin = Path::new("/opt/homebrew/bin/fake-tool");
+
+    let inv_ok = auscan_lib::adapters::Invocation {
+        phase: auscan_lib::adapters::Phase::Discovery,
+        argv: vec!["-t".to_string(), "198.51.100.5".to_string()],
+        targets: vec![target],
+        needs_privilege: false,
+        raw_from: auscan_lib::adapters::RawSource::Stdout,
+        progress_from: auscan_lib::adapters::ProgressSource::None,
+        stdin: None,
+        timeout: std::time::Duration::from_secs(5),
+    };
+    assert!(verja(&inv_ok, bin, &d, bin).is_ok());
+
+    // Un objetivo que no está en inv.targets debe seguir tumbando la
+    // verja aunque el binario y las banderas sean correctos.
+    let mut inv_mal = inv_ok;
+    inv_mal.argv.push("198.51.100.200".to_string());
+    assert!(verja(&inv_mal, bin, &d, bin).is_err());
 }
