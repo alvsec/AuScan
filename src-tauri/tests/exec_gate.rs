@@ -76,3 +76,14 @@ fn recorta_espacios_antes_de_reconocer_una_ip() {
         "una IP autorizada con espacios alrededor debe seguir reconociéndose como tal"
     );
 }
+
+#[test]
+fn rechaza_una_ip_no_autorizada_aunque_lleve_espacios_alrededor() {
+    let scope = scope_198();
+    let targets = objetivos(&scope, &["198.51.100.5"]);
+    let argv = vec![" 198.51.100.9 ".to_string()];
+    assert!(
+        validate_targets(&argv, &targets).is_err(),
+        "una IP fuera de targets con espacios alrededor debe seguir rechazándose"
+    );
+}
