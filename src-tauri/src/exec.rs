@@ -20,13 +20,14 @@ use crate::scope::ScopedTarget;
 /// tercero.
 pub fn validate_targets(argv: &[String], targets: &[ScopedTarget]) -> Result<()> {
     for token in argv {
-        if let Ok(ip) = token.parse::<IpAddr>() {
+        let trimmed = token.trim();
+        if let Ok(ip) = trimmed.parse::<IpAddr>() {
             if !targets.iter().any(|t| t.ip() == ip) {
                 return Err(AppError::UnvalidatedTarget(token.clone()));
             }
             continue;
         }
-        if let Some((host, resto)) = token.split_once('/') {
+        if let Some((host, resto)) = trimmed.split_once('/') {
             if host.parse::<IpAddr>().is_ok() && resto.chars().all(|c| c.is_ascii_digit()) {
                 return Err(AppError::UnvalidatedTarget(token.clone()));
             }

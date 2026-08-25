@@ -65,3 +65,14 @@ fn un_argv_vacio_de_objetivos_pasa_trivialmente() {
     let targets: Vec<auscan_lib::scope::ScopedTarget> = vec![];
     assert!(validate_targets(&["-sn".to_string()], &targets).is_ok());
 }
+
+#[test]
+fn recorta_espacios_antes_de_reconocer_una_ip() {
+    let scope = scope_198();
+    let targets = objetivos(&scope, &["198.51.100.5"]);
+    let argv = vec![" 198.51.100.5 ".to_string()];
+    assert!(
+        validate_targets(&argv, &targets).is_ok(),
+        "una IP autorizada con espacios alrededor debe seguir reconociéndose como tal"
+    );
+}
