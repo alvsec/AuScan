@@ -102,10 +102,15 @@ Si `cargo` no responde, el check **sale con error** en vez de pasar en verde. Un
 check que no puede comprobar tiene que decirlo: si no, deja de comprobar sin que
 nadie se entere.
 
-La webview corre con una CSP restrictiva (`default-src 'self'`) y su capability
-concede únicamente `core:default`. No hay plugin de apertura de URLs ni de
-diálogos: conceder permisos que nadie usa solo amplía lo que alcanzaría una
-webview comprometida.
+La webview corre con una CSP restrictiva (`default-src 'self'`, sin
+`form-action` ni `base-uri`) y su capability concede únicamente
+`core:default`. No hay plugin de apertura de URLs ni de diálogos: conceder
+permisos que nadie usa solo amplía lo que alcanzaría una webview comprometida.
+
+**Límite conocido:** Tauri solo inyecta esta CSP en el asset servido en
+producción; en `tauri dev` la ventana carga directamente desde el servidor de
+Vite sin CSP. La superficie real está cubierta en el binario que se distribuye,
+no durante el desarrollo.
 
 `scope_check` acepta solo direcciones literales. Resolver nombres ahí lo
 convertiría en un oráculo de DNS: cualquier cadena de la webview saldría a la red

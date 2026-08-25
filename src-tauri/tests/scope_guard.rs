@@ -17,10 +17,22 @@ fn los_limites_del_cidr_caen_del_lado_correcto() {
     // El alcance va al centro del bloque de documentación para que los
     // vecinos de ambos lados caigan también dentro de RFC 5737.
     let s = scope(&["198.51.100.64/26"], &[]);
-    assert!(s.validate("198.51.100.64").is_ok(), "la dirección de red está dentro");
-    assert!(s.validate("198.51.100.127").is_ok(), "el broadcast está dentro");
-    assert!(s.validate("198.51.100.63").is_err(), "la anterior está fuera");
-    assert!(s.validate("198.51.100.128").is_err(), "la siguiente está fuera");
+    assert!(
+        s.validate("198.51.100.64").is_ok(),
+        "la dirección de red está dentro"
+    );
+    assert!(
+        s.validate("198.51.100.127").is_ok(),
+        "el broadcast está dentro"
+    );
+    assert!(
+        s.validate("198.51.100.63").is_err(),
+        "la anterior está fuera"
+    );
+    assert!(
+        s.validate("198.51.100.128").is_err(),
+        "la siguiente está fuera"
+    );
 }
 
 #[test]
@@ -43,7 +55,10 @@ fn deny_anidado_dentro_de_allow_recorta_el_alcance() {
 #[test]
 fn un_alcance_sin_allow_rechaza_todo() {
     let vacio = scope(&[], &[]);
-    assert!(matches!(vacio.validate("198.51.100.5"), Err(AppError::EmptyScope)));
+    assert!(matches!(
+        vacio.validate("198.51.100.5"),
+        Err(AppError::EmptyScope)
+    ));
 
     // Aunque haya exclusiones: sin autorización explícita no hay nada autorizado.
     let solo_deny = scope(&[], &["198.51.100.0/24"]);
@@ -57,7 +72,9 @@ fn un_alcance_sin_allow_rechaza_todo() {
 fn ipv6_funciona_igual_en_forma_comprimida_y_expandida() {
     let s = scope(&["2001:db8:a::/48"], &["2001:db8:a:dead::/64"]);
     assert!(s.validate("2001:db8:a::1").is_ok());
-    assert!(s.validate("2001:0db8:000a:0000:0000:0000:0000:0001").is_ok());
+    assert!(s
+        .validate("2001:0db8:000a:0000:0000:0000:0000:0001")
+        .is_ok());
     assert!(s.validate("2001:db8:a:dead::1").is_err());
     assert!(s.validate("2001:db8:b::1").is_err());
 }
@@ -93,7 +110,11 @@ fn lo_que_no_es_una_direccion_se_rechaza_como_invalido() {
 fn el_objetivo_validado_conserva_la_direccion_canonica() {
     let s = scope(&["192.0.2.0/24"], &[]);
     let t = s.validate("::ffff:192.0.2.65").unwrap();
-    assert_eq!(t.to_string(), "192.0.2.65", "se pasa a la herramienta ya canónica");
+    assert_eq!(
+        t.to_string(),
+        "192.0.2.65",
+        "se pasa a la herramienta ya canónica"
+    );
 }
 
 #[test]
@@ -104,7 +125,10 @@ fn un_deny_escrito_en_notacion_mapeada_excluye_de_verdad() {
     // fallo posible en esta pieza: dice "dentro de alcance" cuando el
     // consultor había escrito explícitamente que no.
     let s = scope(&["192.0.2.0/24"], &["::ffff:192.0.2.64/122"]);
-    assert!(s.validate("192.0.2.1").is_ok(), "fuera del deny, sigue autorizado");
+    assert!(
+        s.validate("192.0.2.1").is_ok(),
+        "fuera del deny, sigue autorizado"
+    );
     assert!(
         matches!(s.validate("192.0.2.65"), Err(AppError::OutOfScope(_))),
         "el deny en notación mapeada debe excluir la dirección v4"

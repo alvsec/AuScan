@@ -21,9 +21,10 @@ impl FakeResolver {
 
 impl Resolver for FakeResolver {
     fn resolve(&self, host: &str) -> std::io::Result<Vec<IpAddr>> {
-        self.0.get(host).cloned().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "sin registro")
-        })
+        self.0
+            .get(host)
+            .cloned()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "sin registro"))
     }
 }
 
@@ -69,7 +70,10 @@ fn si_una_sola_ip_cae_fuera_se_rechaza_el_nombre_entero() {
     let s = scope(&["198.51.100.0/24"], &[]);
     let r = FakeResolver::con(&[("mixto.example", &["198.51.100.5", "203.0.113.9"])]);
     assert!(
-        matches!(s.validate_target("mixto.example", &r), Err(AppError::OutOfScope(_))),
+        matches!(
+            s.validate_target("mixto.example", &r),
+            Err(AppError::OutOfScope(_))
+        ),
         "dentro y fuera a la vez no se resuelve a medias: se rechaza"
     );
 }

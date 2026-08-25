@@ -25,17 +25,11 @@ const RE_MAC_UNA = /^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/i;
 const RE_V6 = /\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b/gi;
 // Las horas de las marcas de tiempo ISO (10:00:00) casan con el patrón de
 // IPv6. Se descartan por forma en vez de exigir una letra hexadecimal en el
-// token, que era como una IPv6 puramente numérica (2620:100:6000::1) se
+// token, que era como una IPv6 puramente numérica (2001:0db8:6000::1) se
 // colaba sin que nadie la viera.
 const RE_HORA = /^\d{1,2}:\d{2}:\d{2}$/;
 
-/// `incluirV6` se apaga al recorrer código fuente: en Rust, `db::open` casa
-/// con cualquier patrón razonable de IPv6 abreviada, y un check que denuncia
-/// sintaxis del lenguaje deja de leerse a la semana. En los ficheros de
-/// datos, donde una dirección de cliente entraría de verdad copiada y
-/// pegada, sí se aplica entero. Las IPv6 en código van por revisión, igual
-/// que los nombres de host.
-export function findForbiddenAddresses(text, { incluirV6 = true } = {}) {
+export function findForbiddenAddresses(text) {
   const malas = [];
 
   for (const m of text.matchAll(RE_V4)) {
@@ -54,12 +48,16 @@ export function findForbiddenAddresses(text, { incluirV6 = true } = {}) {
     malas.push(m[0]);
   }
 
-  if (!incluirV6) return [...new Set(malas)];
-
   for (const m of text.matchAll(RE_V6)) {
     const token = m[0];
     if (RE_MAC_UNA.test(token)) continue;
     if (RE_HORA.test(token)) continue;
+    // Menos de dos grupos no vacíos no es una IPv6 real: es la forma en
+    // que "db::" —de db::open, en cualquier fichero de Rust— casa con el
+    // patrón. Con dos o más, "db::" queda fuera y toda dirección real
+    // (incluida una numérica como 2001:0db8:6000::1) sigue dentro.
+    const gruposNoVacios = token.split(":").filter(Boolean).length;
+    if (gruposNoVacios < 2) continue;
     // 2001:db8::/32 admite tanto la forma corta como 2001:0db8.
     if (/^2001:0{0,3}db8:/i.test(token)) continue;
     malas.push(token);
@@ -69,23 +67,35 @@ export function findForbiddenAddresses(text, { incluirV6 = true } = {}) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { readdirSync, readFileSync, statSync, existsSync } = await import("node:fs");
+  const { readdirSync, readFileSync, statSync } = await import("node:fs");
   const { join } = await import("node:path");
+
+  // Todo el código y la documentación versionados, no una lista de
+  // directorios elegidos porque hoy están limpios: esa lista tiende a
+  // crecer sin que nadie note por qué faltaba uno. Se excluyen los
+  // directorios generados y dos ficheros nombrados explícitamente, que
+  // documentan a propósito los vectores de prueba NEGATIVOS de este mismo
+  // check —tienen que contener direcciones prohibidas para poder afirmar
+  // que el check las detecta— y que de otro modo se denunciarían a sí
+  // mismos en cada ejecución.
+  const DIRS_EXCLUIDOS = new Set([
+    "node_modules", "dist", "target", ".git", ".superpowers",
+  ]);
+  const FICHEROS_EXENTOS = new Set([
+    "scripts/checks/checks.test.mjs",
+    "docs/superpowers/plans/2026-08-22-auscan-fundacion.md",
+  ]);
 
   const ficheros = [];
   const recorrer = (d) => {
     for (const e of readdirSync(d)) {
+      if (DIRS_EXCLUIDOS.has(e)) continue;
       const p = join(d, e);
       if (statSync(p).isDirectory()) recorrer(p);
-      else ficheros.push(p);
+      else if (!FICHEROS_EXENTOS.has(p)) ficheros.push(p);
     }
   };
-  // No basta con mirar fixtures/: las direcciones de prueba viven también
-  // en los tests, y la regla solo sirve si se aplica donde puede colarse
-  // una de verdad.
-  for (const raiz of ["fixtures", "src-tauri/tests", "src"]) {
-    if (existsSync(raiz)) recorrer(raiz);
-  }
+  recorrer(".");
 
   let fallos = 0;
   for (const f of ficheros) {

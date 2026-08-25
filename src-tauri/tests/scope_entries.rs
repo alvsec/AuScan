@@ -3,7 +3,12 @@ use std::net::IpAddr;
 
 #[test]
 fn acepta_redes_canonicas() {
-    for s in ["198.51.100.0/24", "192.0.2.0/25", "2001:db8::/32", "203.0.113.7"] {
+    for s in [
+        "198.51.100.0/24",
+        "192.0.2.0/25",
+        "2001:db8::/32",
+        "203.0.113.7",
+    ] {
         assert!(scope::parse_entry(s).is_ok(), "debería aceptar {s}");
     }
 }
@@ -45,8 +50,14 @@ fn las_v4_mapeadas_se_canonicalizan_a_v4() {
 
 #[test]
 fn family_of_distingue_las_dos_familias() {
-    assert_eq!(scope::family_of(&scope::parse_entry("198.51.100.0/24").unwrap()), "v4");
-    assert_eq!(scope::family_of(&scope::parse_entry("2001:db8::/32").unwrap()), "v6");
+    assert_eq!(
+        scope::family_of(&scope::parse_entry("198.51.100.0/24").unwrap()),
+        "v4"
+    );
+    assert_eq!(
+        scope::family_of(&scope::parse_entry("2001:db8::/32").unwrap()),
+        "v6"
+    );
 }
 
 #[test]

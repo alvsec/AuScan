@@ -106,9 +106,9 @@ pub fn parse_entry(s: &str) -> Result<IpNet> {
                 .map_err(|_| AppError::InvalidAddress(s.to_string()))?,
         );
         Ok(match ip {
-            IpAddr::V4(a) => IpNet::V4(
-                Ipv4Net::new(a, 32).map_err(|_| AppError::InvalidAddress(s.to_string()))?,
-            ),
+            IpAddr::V4(a) => {
+                IpNet::V4(Ipv4Net::new(a, 32).map_err(|_| AppError::InvalidAddress(s.to_string()))?)
+            }
             IpAddr::V6(a) => IpNet::V6(
                 Ipv6Net::new(a, 128).map_err(|_| AppError::InvalidAddress(s.to_string()))?,
             ),
@@ -150,16 +150,6 @@ pub struct Scope {
 }
 
 impl Scope {
-    /// Construye un alcance a partir de redes YA canónicas.
-    ///
-    /// Salta `parse_entry`, y con él el rechazo de `/0` y la
-    /// canonicalización de las formas mapeadas. Es `pub(crate)` a
-    /// propósito: fuera de este crate el único camino es `from_entries`,
-    /// que sí valida.
-    pub(crate) fn new(allow: Vec<IpNet>, deny: Vec<IpNet>) -> Self {
-        Self { allow, deny }
-    }
-
     pub fn from_entries(entries: &[(ScopeKind, String)]) -> Result<Self> {
         let mut allow = Vec::new();
         let mut deny = Vec::new();

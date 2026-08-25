@@ -35,9 +35,11 @@ fn el_indice_no_guarda_nada_que_identifique_al_cliente() {
     esperadas.sort();
     let mut reales: Vec<&str> = cols.iter().map(String::as_str).collect();
     reales.sort();
-    assert_eq!(reales, esperadas,
+    assert_eq!(
+        reales, esperadas,
         "index.db solo puede contener estas columnas: alcance, autorizante y \
-         ruta de exportación viven dentro del engagement y mueren con él");
+         ruta de exportación viven dentro del engagement y mueren con él"
+    );
 }
 
 #[test]

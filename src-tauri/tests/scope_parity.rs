@@ -60,7 +60,10 @@ fn el_guard_coincide_con_el_corpus() {
     let c: Corpus = serde_json::from_str(CORPUS).expect("corpus mal formado");
     let mut fallos: Vec<String> = Vec::new();
     for caso in &c.cases {
-        let spec = c.scopes.get(&caso.scope).expect("scope inexistente en el corpus");
+        let spec = c
+            .scopes
+            .get(&caso.scope)
+            .expect("scope inexistente en el corpus");
         let s = construir(spec);
         let real = veredicto(&s, &caso.target);
         if real != caso.expect {

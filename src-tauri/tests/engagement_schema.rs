@@ -25,10 +25,18 @@ fn estan_todas_las_tablas() {
     let (_d, conn) = migrated();
     let t = tablas(&conn);
     for esperada in [
-        "engagement", "scope_entry", "tool_run", "host", "host_tag",
-        "service", "observation",
+        "engagement",
+        "scope_entry",
+        "tool_run",
+        "host",
+        "host_tag",
+        "service",
+        "observation",
     ] {
-        assert!(t.contains(&esperada.to_string()), "falta la tabla {esperada}");
+        assert!(
+            t.contains(&esperada.to_string()),
+            "falta la tabla {esperada}"
+        );
     }
 }
 
@@ -46,7 +54,10 @@ fn engagement_admite_exactamente_una_fila() {
          VALUES ('b','ROMERO','2026-01-01T00:00:00Z','draft')",
         [],
     );
-    assert!(segunda.is_err(), "el CHECK(rowid=1) debe impedir la segunda fila");
+    assert!(
+        segunda.is_err(),
+        "el CHECK(rowid=1) debe impedir la segunda fila"
+    );
 }
 
 #[test]
@@ -90,7 +101,11 @@ fn borrar_un_host_arrastra_sus_servicios() {
 #[test]
 fn service_es_unico_por_host_puerto_protocolo() {
     let (_d, conn) = migrated();
-    conn.execute("INSERT INTO host (id, ip, state) VALUES (1,'198.51.100.5','up')", []).unwrap();
+    conn.execute(
+        "INSERT INTO host (id, ip, state) VALUES (1,'198.51.100.5','up')",
+        [],
+    )
+    .unwrap();
     conn.execute(
         "INSERT INTO service (host_id, port, proto, state) VALUES (1,443,'tcp','open')",
         [],

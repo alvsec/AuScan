@@ -327,8 +327,8 @@ pub struct ScopedTarget(IpAddr);   // campo privado: infabricable fuera de scope
 - `deny` gana siempre sobre `allow`, sin importar la especificidad.
 - Sin ninguna entrada `allow`, el alcance está vacío y **todo** se rechaza. El
   estado por defecto es "nada autorizado", nunca "todo autorizado".
-- Las entradas se normalizan a forma canónica al guardarse (`10.0.0.5/24` →
-  se rechaza como ambigua; se exige `10.0.0.0/24` o `10.0.0.5/32`).
+- Las entradas se normalizan a forma canónica al guardarse (`198.51.100.5/24` →
+  se rechaza como ambigua; se exige `198.51.100.0/24` o `198.51.100.5/32`).
 - IPv4 e IPv6 desde el principio: el coste es una dependencia (`ipnet`) y la
   omisión sería difícil de retrofitear.
 - Un hostname se resuelve antes de validar; **todas** sus IPs deben estar en

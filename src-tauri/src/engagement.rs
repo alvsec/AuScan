@@ -98,16 +98,22 @@ pub fn list(root: &Path) -> Result<Vec<EngagementRef>> {
 }
 
 pub fn get(root: &Path, id: &str) -> Result<EngagementRef> {
+    let id = canonical_id(id)?;
     list(root)?
         .into_iter()
         .find(|e| e.id == id)
-        .ok_or_else(|| AppError::EngagementNotFound(id.to_string()))
+        .ok_or_else(|| AppError::EngagementNotFound(id))
 }
 
 /// Abre la base de un engagement existente. No la crea: si el fichero no
 /// está, es que el engagement no existe o ya se purgó.
 pub fn open(root: &Path, id: &str) -> Result<Connection> {
-    let ruta = paths::engagement_db_path(root, id)?;
+    // Se canonicaliza aquí, no solo en la frontera de comandos: esta
+    // función es pub y auscan_lib es una librería — cualquier llamador
+    // futuro (la fase de ejecución, un test, un binario aparte) tiene
+    // que recibir la misma garantía sin tener que saber por qué.
+    let id = canonical_id(id)?;
+    let ruta = paths::engagement_db_path(root, &id)?;
     if !ruta.is_file() {
         return Err(AppError::EngagementNotFound(id.to_string()));
     }
@@ -121,9 +127,11 @@ pub fn open(root: &Path, id: &str) -> Result<Connection> {
 /// La carpeta de exportación NO se toca: es el entregable y vive fuera
 /// del control de la app. La UI debe decirlo explícitamente.
 pub fn purge(root: &Path, id: &str) -> Result<EngagementRef> {
-    // engagement_dir valida el identificador: nada que no sea un UUID
-    // llega a un remove_dir_all.
-    let ruta = paths::engagement_dir(root, id)?;
+    // Canonicalizar aquí, no solo en la frontera, es lo que de verdad
+    // cierra el bug: purge('{MAYUSCULAS}') tiene que dejar la misma
+    // lápida que purge('minusculas'), lo llame quien lo llame.
+    let id = canonical_id(id)?;
+    let ruta = paths::engagement_dir(root, &id)?;
 
     if ruta.exists() {
         std::fs::remove_dir_all(&ruta)?;
@@ -143,8 +151,8 @@ pub fn purge(root: &Path, id: &str) -> Result<EngagementRef> {
         rusqlite::params![id, purged_at],
     )?;
     if filas == 0 {
-        return Err(AppError::EngagementNotFound(id.to_string()));
+        return Err(AppError::EngagementNotFound(id));
     }
 
-    get(root, id)
+    get(root, &id)
 }

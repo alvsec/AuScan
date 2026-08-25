@@ -23,7 +23,10 @@ fn purge_borra_el_directorio_entero() {
 
     engagement::purge(root, &e.id).unwrap();
 
-    assert!(!ruta.exists(), "el directorio del engagement debe desaparecer");
+    assert!(
+        !ruta.exists(),
+        "el directorio del engagement debe desaparecer"
+    );
 }
 
 #[test]
@@ -33,8 +36,11 @@ fn purge_no_deja_ficheros_wal_ni_shm() {
     let e = engagement::create(root, "CLAVEL").unwrap();
     {
         let conn = engagement::open(root, &e.id).unwrap();
-        conn.execute("INSERT INTO host (ip, state) VALUES ('198.51.100.9','up')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO host (ip, state) VALUES ('198.51.100.9','up')",
+            [],
+        )
+        .unwrap();
     }
     engagement::purge(root, &e.id).unwrap();
 
@@ -58,7 +64,10 @@ fn purge_deja_lapida_en_el_indice() {
     assert_eq!(lapida.id, e.id);
     assert_eq!(lapida.codename, "CLAVEL");
     assert_eq!(lapida.state, "purged");
-    assert!(lapida.purged_at.is_some(), "debe registrarse cuándo se purgó");
+    assert!(
+        lapida.purged_at.is_some(),
+        "debe registrarse cuándo se purgó"
+    );
 
     // Y sigue apareciendo al listar: la lápida es visible a propósito.
     let l = engagement::list(root).unwrap();
@@ -135,10 +144,12 @@ fn purgar_con_otra_codificacion_del_mismo_id_deja_lapida() {
     let e = engagement::create(root, "CLAVEL").unwrap();
 
     let disfrazado = format!("{{{}}}", e.id.to_uppercase());
-    let id = engagement::canonical_id(&disfrazado).unwrap();
-    assert_eq!(id, e.id);
+    assert_eq!(engagement::canonical_id(&disfrazado).unwrap(), e.id);
 
-    let lapida = engagement::purge(root, &id).unwrap();
+    // Se pasa la forma disfrazada DIRECTAMENTE a purge, sin canonicalizar
+    // antes: así el test ejercita el sitio real donde estaba el bug
+    // (dentro de la función, no en la frontera de comandos que la llama).
+    let lapida = engagement::purge(root, &disfrazado).unwrap();
     assert_eq!(lapida.state, "purged");
     assert!(lapida.purged_at.is_some());
     assert!(!paths::engagement_dir(root, &e.id).unwrap().exists());
@@ -156,9 +167,16 @@ fn si_falla_el_alta_en_el_indice_no_queda_directorio_huerfano() {
         let _ = std::fs::remove_file(p);
     }
 
-    let antes = std::fs::read_dir(paths::engagements_dir(root)).unwrap().count();
+    let antes = std::fs::read_dir(paths::engagements_dir(root))
+        .unwrap()
+        .count();
     let r = engagement::create(root, "SEGUNDO");
     assert!(r.is_err(), "con el índice roto, create debe fallar");
-    let despues = std::fs::read_dir(paths::engagements_dir(root)).unwrap().count();
-    assert_eq!(antes, despues, "no debe quedar un directorio sin referencia");
+    let despues = std::fs::read_dir(paths::engagements_dir(root))
+        .unwrap()
+        .count();
+    assert_eq!(
+        antes, despues,
+        "no debe quedar un directorio sin referencia"
+    );
 }

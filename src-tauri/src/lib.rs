@@ -25,12 +25,16 @@ fn engagement_list(state: State<AppState>) -> Result<Vec<EngagementRef>> {
 #[tauri::command]
 fn engagement_open(state: State<AppState>, id: String) -> Result<EngagementRef> {
     let id = engagement::canonical_id(&id)?;
-    // El lock se sostiene durante todo el trabajo de disco. Si se soltara,
+    // El lock se sostiene durante todo el trabajo de disco: si se soltara,
     // una purga concurrente podría borrar el directorio entre la
     // comprobación de existencia y la apertura, y db::open lo recrearía
     // justo después de que la purga verificase que ya no estaba.
+    //
+    // No se limpia el hueco al entrar: si ya había un engagement A abierto
+    // y esta llamada abre B pero falla, A debe seguir abierto. Limpiar
+    // primero dejaría al frontend creyendo que A sigue activo mientras el
+    // backend ya no tiene ninguna conexión.
     let mut guard = state.open.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = None;
     let conn = engagement::open(&state.root, &id)?;
     let referencia = engagement::get(&state.root, &id)?;
     *guard = Some(OpenEngagement { id, conn });
@@ -40,12 +44,17 @@ fn engagement_open(state: State<AppState>, id: String) -> Result<EngagementRef> 
 #[tauri::command]
 fn engagement_purge(state: State<AppState>, id: String) -> Result<EngagementRef> {
     let id = engagement::canonical_id(&id)?;
-    // Se cierra siempre, sin comparar identificadores: hay como mucho un
-    // engagement abierto, y conservar el descriptor de otro no aporta nada
-    // frente al riesgo de borrar con un fichero abierto (en Windows
-    // directamente falla). El lock se sostiene hasta escribir la lápida.
+    // El lock se sostiene durante todo el trabajo de disco, por la misma
+    // razón que en engagement_open. Solo se cierra la conexión si es la
+    // del engagement que se está purgando: purgar B mientras A está
+    // abierto no debe dejar a A con su conexión cerrada mientras el
+    // frontend sigue mostrándolo como activo. Como ambos lados llegan ya
+    // canonicalizados, la comparación es fiable sin importar en qué
+    // codificación llegó cada identificador.
     let mut guard = state.open.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = None;
+    if guard.as_ref().is_some_and(|o| o.id == id) {
+        *guard = None;
+    }
     engagement::purge(&state.root, &id)
 }
 

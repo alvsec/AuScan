@@ -3,8 +3,10 @@ name: CI
 on:
   # Todas las ramas, no solo main: SECURITY.md promete que la regla de
   # datos sintéticos se comprueba en cada push, y una promesa que solo
-  # se cumple al fusionar llega tarde.
+  # se cumple al fusionar llega tarde. branches-ignore evita que una rama
+  # con PR abierta dispare la matriz completa dos veces por el mismo commit.
   push:
+    branches-ignore: [main]
   pull_request:
 
 jobs:

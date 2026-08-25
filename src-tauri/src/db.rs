@@ -25,14 +25,15 @@ pub fn open(path: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)?;
     }
     let conn = Connection::open(path)?;
+    // Antes que cualquier pragma: journal_mode=WAL necesita un lock breve
+    // y exclusivo, y varias operaciones abren su propia conexión al índice
+    // y pueden solaparse justo ahí. Con busy_timeout después, el propio
+    // WAL de esta función podía toparse con SQLITE_BUSY sin esperar.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     // journal_mode devuelve una fila, así que no sirve pragma_update.
     conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
-    // Varias operaciones abren su propia conexión al índice y pueden
-    // solaparse. Sin esto, el manejador por defecto devuelve SQLITE_BUSY al
-    // instante y el operador ve "database is locked" en vez de esperar.
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(conn)
 }
 
