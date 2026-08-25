@@ -101,3 +101,34 @@ fn create_rechaza_un_codename_vacio() {
         Err(AppError::InvalidCodename)
     ));
 }
+
+#[test]
+fn create_with_id_canonicaliza_aunque_el_id_sea_valido_pero_no_canonico() {
+    // Regresión: create_with_id validaba la RUTA a través de paths::*,
+    // pero escribía en el índice y en la tabla engagement la cadena tal
+    // cual llegó. Un UUID válido en otra codificación (entre llaves, en
+    // mayúsculas) dejaba la fila con esa forma cruda mientras el
+    // directorio en disco usaba la forma canónica — el mismo desajuste
+    // que canonical_id existe para cerrar, reabierto por esta puerta.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let disfrazado = "{7F3A4C2E-0B1D-4E5F-8A9B-1C2D3E4F5A6B}";
+    let canonico = "7f3a4c2e-0b1d-4e5f-8a9b-1c2d3e4f5a6b";
+
+    let e = engagement::create_with_id(root, "CLAVEL", disfrazado).unwrap();
+    assert_eq!(
+        e.id, canonico,
+        "el id devuelto debe ser ya la forma canónica"
+    );
+
+    let listados = engagement::list(root).unwrap();
+    assert_eq!(
+        listados[0].id, canonico,
+        "la fila del índice también debe ser canónica"
+    );
+
+    // Y purge(), que compara por id, tiene que encontrarlo sin más vueltas.
+    let lapida = engagement::purge(root, canonico).unwrap();
+    assert_eq!(lapida.state, "purged");
+    assert!(lapida.purged_at.is_some());
+}

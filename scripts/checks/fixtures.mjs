@@ -87,13 +87,19 @@ const EXT_BINARIAS = new Set([
   ".png", ".ico", ".icns", ".jpg", ".jpeg", ".gif", ".woff", ".woff2",
 ]);
 
-/// A partir de la salida cruda de `git ls-files` (líneas separadas por
-/// "\n", posible línea vacía final), devuelve los ficheros que de verdad
-/// hay que comprobar: sin los exentos, sin binarios reconocibles por
-/// extensión. Función pura para poder testearla sin invocar a git.
+/// A partir de la salida cruda de `git ls-files -z` (entradas separadas
+/// por NUL, terminador final incluido), devuelve los ficheros que de
+/// verdad hay que comprobar: sin los exentos, sin binarios reconocibles
+/// por extensión. Función pura para poder testearla sin invocar a git.
+///
+/// -z en vez de saltos de línea: sin él, un nombre con caracteres no
+/// ASCII sale entrecomillado y con escapes octales ("archivo con
+/// eñe.md" → "\"archivo con e\\303\\261e.md\""), y esa cadena no es una
+/// ruta abrible — revienta el readFileSync de más abajo con un ENOENT
+/// que no dice qué pasó de verdad.
 export function ficherosAComprobar(lsFilesStdout) {
   return lsFilesStdout
-    .split("\n")
+    .split("\0")
     .filter(Boolean)
     .filter((f) => !FICHEROS_EXENTOS.has(f))
     .filter((f) => !EXT_BINARIAS.has(f.slice(f.lastIndexOf("."))));
@@ -103,19 +109,22 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { readFileSync } = await import("node:fs");
   const { execFileSync } = await import("node:child_process");
 
-  // Se recorre lo que git tiene versionado, no el árbol de trabajo: así
-  // quedan fuera .DS_Store, gen/schemas y cualquier otro generado, sin
-  // mantener una lista de exclusiones a mano que alguien tiene que
-  // acordarse de ampliar. Si git no responde, el check falla en vez de
+  // Se recorre lo que git conoce: lo versionado (--cached) MÁS lo nuevo
+  // que aún no se ha añadido (--others, filtrado por .gitignore con
+  // --exclude-standard). Solo --cached se queda corto: un fichero recién
+  // creado con datos de cliente, todavía sin `git add`, pasaría este
+  // check en verde justo en el momento —antes de comitear— en el que
+  // pillarlo importa más. Si git no responde, el check falla en vez de
   // recorrer un árbol arbitrario — mismo principio que no-http-client.mjs
   // aplica a `cargo tree`: un check que no puede verificar tiene que
   // decirlo, no pasar en silencio.
   let salida;
   try {
-    salida = execFileSync("git", ["ls-files"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    salida = execFileSync(
+      "git",
+      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
   } catch (e) {
     console.error(`no se pudo listar los ficheros versionados: ${e.message}`);
     process.exit(2);
@@ -131,7 +140,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   let fallos = 0;
   for (const f of ficheros) {
-    const malas = findForbiddenAddresses(readFileSync(f, "utf8"));
+    let contenido;
+    try {
+      contenido = readFileSync(f, "utf8");
+    } catch (e) {
+      // Un fichero listado por git pero ausente del disco (borrado sin
+      // `git rm`) o un nombre que -z ya evita que llegue mal formado:
+      // se informa como fallo del check, no como una traza cruda de Node.
+      console.error(`${f}: no se pudo leer (${e.code ?? e.message})`);
+      fallos += 1;
+      continue;
+    }
+    const malas = findForbiddenAddresses(contenido);
     if (malas.length > 0) {
       console.error(`${f}: direcciones prohibidas → ${malas.join(", ")}`);
       fallos += malas.length;

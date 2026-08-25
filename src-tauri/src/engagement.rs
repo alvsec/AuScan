@@ -49,6 +49,15 @@ pub fn create(root: &Path, codename: &str) -> Result<EngagementRef> {
 /// un UUID, así que esto no abre una vía para escribir fuera del
 /// app-data dir.
 pub fn create_with_id(root: &Path, codename: &str, id: &str) -> Result<EngagementRef> {
+    // Se canonicaliza aquí, no solo se confía en que paths::* valide la
+    // ruta: esta función es pub, y un id válido pero no canónico (por
+    // ejemplo entre llaves y en mayúsculas) escribiría esa forma cruda en
+    // el índice y en la tabla engagement, mientras el directorio en disco
+    // usa la forma canónica. purge() compara contra lo que hay en la
+    // fila, así que ese desajuste reproduce exactamente el bug que
+    // canonical_id existe para cerrar.
+    let id = &canonical_id(id)?;
+
     let codename = codename.trim();
     if codename.is_empty() {
         return Err(AppError::InvalidCodename);

@@ -96,18 +96,29 @@ describe("comprobación de fixtures", () => {
 });
 
 describe("lista de ficheros a comprobar", () => {
+  // git ls-files -z separa por NUL, no por salto de línea: sin -z, un
+  // nombre no ASCII sale entrecomillado con escapes octales y deja de
+  // ser una ruta abrible.
   it("excluye los dos ficheros con vectores de prueba negativos", () => {
-    const salida = "fixtures/scope/corpus.json\nscripts/checks/checks.test.mjs\nREADME.md\n";
+    const salida =
+      "fixtures/scope/corpus.json\0scripts/checks/checks.test.mjs\0README.md\0";
     expect(ficherosAComprobar(salida)).toEqual(["fixtures/scope/corpus.json", "README.md"]);
   });
 
   it("excluye binarios reconocibles por extensión", () => {
-    const salida = "src-tauri/icons/32x32.png\nsrc/App.tsx\n";
+    const salida = "src-tauri/icons/32x32.png\0src/App.tsx\0";
     expect(ficherosAComprobar(salida)).toEqual(["src/App.tsx"]);
   });
 
-  it("ignora la línea vacía final de git ls-files", () => {
-    expect(ficherosAComprobar("a.txt\nb.txt\n")).toEqual(["a.txt", "b.txt"]);
+  it("ignora el terminador NUL final de git ls-files -z", () => {
+    expect(ficherosAComprobar("a.txt\0b.txt\0")).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("separa por NUL, no por salto de línea: un nombre con espacios no se rompe", () => {
+    // Sin -z, git ls-files sin más entrecomilla los nombres "raros"; con
+    // -z, un nombre con espacios llega tal cual, en una sola entrada.
+    const salida = "docs/nombre con espacios.md\0otro.md\0";
+    expect(ficherosAComprobar(salida)).toEqual(["docs/nombre con espacios.md", "otro.md"]);
   });
 });
 
