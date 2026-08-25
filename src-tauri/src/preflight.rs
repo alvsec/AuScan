@@ -164,6 +164,56 @@ pub fn run_install(
     std::process::Command::new(program).args(args).output()
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolReport {
+    pub tool_id: String,
+    pub status: ToolStatus,
+    pub install_command: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightReport {
+    pub tools: Vec<ToolReport>,
+    pub privileged: bool,
+    pub filevault: FileVaultStatus,
+}
+
+/// Ejecuta la detección completa: por cada adaptador del registro,
+/// resuelve su binario en PATH y compara versión; añade la matriz de
+/// capacidades. Es la única función de este módulo que hace IO real de
+/// principio a fin — todo lo que envuelve ya está testeado por separado.
+pub fn run_preflight(adapters: &[Box<dyn ToolAdapter>]) -> PreflightReport {
+    let platform = current_platform();
+    let tools = adapters
+        .iter()
+        .map(|a| {
+            let descriptor = a.descriptor();
+            let status = check_tool(
+                a.as_ref(),
+                |b| which::which(b).ok(),
+                |path, argv| {
+                    std::process::Command::new(path)
+                        .args(argv)
+                        .output()
+                        .map(|o| o.stdout)
+                },
+            );
+            ToolReport {
+                tool_id: descriptor.id.to_string(),
+                install_command: install_display_command(&descriptor.install_hint, platform),
+                status,
+            }
+        })
+        .collect();
+    PreflightReport {
+        tools,
+        privileged: running_privileged(),
+        filevault: filevault_status(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

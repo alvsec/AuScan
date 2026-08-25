@@ -97,6 +97,25 @@ fn scope_check(state: State<AppState>, target: String) -> Result<Vec<String>> {
     })
 }
 
+#[tauri::command]
+fn preflight_run() -> preflight::PreflightReport {
+    preflight::run_preflight(&adapters::registry())
+}
+
+#[tauri::command]
+fn preflight_install(tool_id: String) -> Result<String> {
+    let registro = adapters::registry();
+    let adaptador = registro
+        .iter()
+        .find(|a| a.descriptor().id == tool_id)
+        .ok_or_else(|| error::AppError::ToolNotFound(tool_id.clone()))?;
+    let salida = preflight::run_install(
+        &adaptador.descriptor().install_hint,
+        preflight::current_platform(),
+    )?;
+    Ok(String::from_utf8_lossy(&salida.stdout).into_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -115,6 +134,8 @@ pub fn run() {
             scope_add,
             scope_remove,
             scope_check,
+            preflight_run,
+            preflight_install,
         ])
         .run(tauri::generate_context!())
         .expect("error al arrancar AUscan");
