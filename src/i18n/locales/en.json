@@ -4,7 +4,29 @@
   },
   "nav": {
     "engagements": "Engagements",
-    "scope": "Scope"
+    "scope": "Scope",
+    "preflight": "Tools"
+  },
+  "preflight": {
+    "title": "Tools",
+    "loading": "Checking…",
+    "privileges": "Privileges",
+    "yes": "Yes",
+    "no": "No",
+    "filevault": "FileVault",
+    "filevaultStatus": { "on": "On", "off": "Off", "unknown": "Unknown" },
+    "empty": "No tools configured yet.",
+    "status": {
+      "ok": "Installed",
+      "tooOld": "Outdated version",
+      "missing": "Not installed",
+      "unparseable": "Unrecognised version"
+    },
+    "copy": "Copy",
+    "install": "Install",
+    "confirmInstall": "This will run: {{command}}",
+    "confirm": "Run",
+    "cancel": "Cancel"
   },
   "engagements": {
     "title": "Engagements",

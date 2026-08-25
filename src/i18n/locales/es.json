@@ -4,7 +4,29 @@
   },
   "nav": {
     "engagements": "Engagements",
-    "scope": "Alcance"
+    "scope": "Alcance",
+    "preflight": "Herramientas"
+  },
+  "preflight": {
+    "title": "Herramientas",
+    "loading": "Comprobando…",
+    "privileges": "Privilegios",
+    "yes": "Sí",
+    "no": "No",
+    "filevault": "FileVault",
+    "filevaultStatus": { "on": "Activado", "off": "Desactivado", "unknown": "Desconocido" },
+    "empty": "Todavía no hay ninguna herramienta configurada.",
+    "status": {
+      "ok": "Instalada",
+      "tooOld": "Versión antigua",
+      "missing": "No instalada",
+      "unparseable": "Versión no reconocida"
+    },
+    "copy": "Copiar",
+    "install": "Instalar",
+    "confirmInstall": "Se ejecutará: {{command}}",
+    "confirm": "Ejecutar",
+    "cancel": "Cancelar"
   },
   "engagements": {
     "title": "Engagements",
