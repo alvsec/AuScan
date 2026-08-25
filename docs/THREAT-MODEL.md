@@ -85,6 +85,13 @@ cerrada (p. ej. `-pwn` casaría con `-p`), y una dirección sin validar podría
 colarse pegada a una bandera permitida—. Sigue abierto, en seguimiento para
 cerrarse antes de que aterrice el adaptador de nmap en la Fase 4.
 
+**Límite conocido:** `needs_privilege` se compara hoy contra la propia
+invocación (`Invocation.needs_privilege`, que pone el adaptador), no contra
+el privilegio real del proceso. `verja()` no puede detectar todavía una
+bandera privilegiada colada en una ejecución sin privilegios de verdad —
+exigir que quien la llame pase el privilegio efectivo (`running_privileged()`
+o equivalente) queda como requisito de la Fase 5.
+
 **Dónde:** `src-tauri/src/exec.rs` · `src-tauri/tests/exec_gate.rs`
 
 ### T5 · Binario suplantado
