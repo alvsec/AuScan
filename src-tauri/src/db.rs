@@ -29,6 +29,10 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
+    // Varias operaciones abren su propia conexión al índice y pueden
+    // solaparse. Sin esto, el manejador por defecto devuelve SQLITE_BUSY al
+    // instante y el operador ve "database is locked" en vez de esperar.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(conn)
 }
 

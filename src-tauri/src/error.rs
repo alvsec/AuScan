@@ -20,6 +20,9 @@ pub enum AppError {
     #[error("alcance demasiado amplio: {0} autorizaría todo el espacio de direcciones")]
     OverbroadScope(String),
 
+    #[error("la entrada de alcance {0} no existe")]
+    ScopeEntryNotFound(i64),
+
     #[error("dirección o rango no válido: {0}")]
     InvalidAddress(String),
 

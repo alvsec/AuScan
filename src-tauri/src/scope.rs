@@ -150,7 +150,13 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn new(allow: Vec<IpNet>, deny: Vec<IpNet>) -> Self {
+    /// Construye un alcance a partir de redes YA canónicas.
+    ///
+    /// Salta `parse_entry`, y con él el rechazo de `/0` y la
+    /// canonicalización de las formas mapeadas. Es `pub(crate)` a
+    /// propósito: fuera de este crate el único camino es `from_entries`,
+    /// que sí valida.
+    pub(crate) fn new(allow: Vec<IpNet>, deny: Vec<IpNet>) -> Self {
         Self { allow, deny }
     }
 
@@ -308,7 +314,13 @@ pub fn add_entry(
 }
 
 pub fn remove_entry(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute("DELETE FROM scope_entry WHERE id = ?1", [id])?;
+    let filas = conn.execute("DELETE FROM scope_entry WHERE id = ?1", [id])?;
+    if filas == 0 {
+        // Quitar una entrada que ya no está no puede confundirse con
+        // quitar una real: en el alcance, creer que has excluido algo que
+        // sigue autorizado es el error caro.
+        return Err(AppError::ScopeEntryNotFound(id));
+    }
     Ok(())
 }
 
@@ -319,9 +331,17 @@ pub fn list_entries(conn: &Connection) -> Result<Vec<ScopeEntry>> {
     )?;
     let filas = st.query_map([], |r| {
         let kind: String = r.get(1)?;
+        // Falla cerrado: cualquier valor inesperado se trata como exclusión,
+        // nunca como autorización. El CHECK del esquema lo hace inalcanzable
+        // hoy, pero la capa de persistencia del guard no debe apoyarse en que
+        // otra capa la proteja.
+        let kind = match kind.as_str() {
+            "allow" => ScopeKind::Allow,
+            _ => ScopeKind::Deny,
+        };
         Ok(ScopeEntry {
             id: r.get(0)?,
-            kind: if kind == "deny" { ScopeKind::Deny } else { ScopeKind::Allow },
+            kind,
             family: r.get(2)?,
             cidr: r.get(3)?,
             note: r.get(4)?,

@@ -16,8 +16,12 @@ por el operador.
 redacta. Esta frase es una restricción de diseño, no una nota de alcance: se
 refleja en el modelo de datos (sin severidad), en el exportador y en la UI.
 
-**Stack:** Tauri 2 (Rust) · React 19 · TypeScript strict · Vite · Tailwind v4 ·
-Zustand · SQLite · i18next (es-ES / en-US).
+**Stack:** Tauri 2 (Rust) · React 19 · TypeScript strict · Vite · Zustand ·
+SQLite · i18next (es-ES / en-US).
+
+Tailwind v4 estaba en el stack inicial y se ha diferido: la UI de la fundación
+es sobria y CSS a mano cubre lo que hay. Entra cuando la pantalla de ejecución
+justifique un sistema de utilidades.
 
 Se reutiliza la arquitectura de `saldio` (`domain` puro · `services` IO ·
 `data/repositories` + mappers · `store` Zustand · `src-tauri` con migraciones

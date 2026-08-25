@@ -13,6 +13,10 @@
 
 const PROHIBIDOS_JS = ["axios", "node-fetch"];
 export const PROHIBIDOS_RUST = ["reqwest", "ureq", "isahc"];
+// `hyper` queda fuera de la lista a propósito: es una implementación de
+// HTTP que se usa tanto de cliente como de servidor, y tauri la arrastra
+// por su servidor interno de assets. Prohibirla daría un falso positivo
+// permanente; lo que importa es que no entre un CLIENTE.
 
 /// Tres formas en que un cliente HTTP aparece en package-lock.json:
 ///   1. como ruta, incluidas las transitivas anidadas

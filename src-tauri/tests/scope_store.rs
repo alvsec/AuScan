@@ -81,3 +81,48 @@ fn no_se_puede_duplicar_una_entrada() {
     scope::add_entry(&conn, ScopeKind::Allow, "198.51.100.0/24", None).unwrap();
     assert!(scope::add_entry(&conn, ScopeKind::Allow, "198.51.100.0/24", None).is_err());
 }
+
+#[test]
+fn quitar_una_entrada_inexistente_falla_en_vez_de_fingir() {
+    let (_d, conn) = engagement_abierto();
+    let a = scope::add_entry(&conn, ScopeKind::Allow, "198.51.100.0/24", None).unwrap();
+    scope::remove_entry(&conn, a.id).unwrap();
+    assert!(
+        matches!(
+            scope::remove_entry(&conn, a.id),
+            Err(AppError::ScopeEntryNotFound(_))
+        ),
+        "creer que has quitado algo que sigue ahí es el error caro"
+    );
+}
+
+#[test]
+fn un_kind_inesperado_en_la_base_se_lee_como_exclusion() {
+    // El CHECK del esquema lo impide por la vía normal, así que se escribe
+    // saltándoselo para comprobar que la lectura falla cerrada: un valor
+    // corrupto no puede convertirse en una autorización.
+    let (_d, conn) = engagement_abierto();
+    conn.execute("DROP TABLE scope_entry", []).unwrap();
+    conn.execute(
+        "CREATE TABLE scope_entry (
+           id INTEGER PRIMARY KEY, kind TEXT NOT NULL, family TEXT NOT NULL,
+           cidr TEXT NOT NULL, note TEXT, created_at TEXT NOT NULL)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO scope_entry (kind, family, cidr, created_at)
+         VALUES ('inventado', 'v4', '198.51.100.0/24', '2026-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let entradas = scope::list_entries(&conn).unwrap();
+    assert_eq!(entradas.len(), 1);
+    assert_eq!(
+        entradas[0].kind,
+        ScopeKind::Deny,
+        "un kind desconocido debe leerse como exclusión, nunca como autorización"
+    );
+    assert!(scope::load(&conn).unwrap().is_empty(), "y no autoriza nada");
+}

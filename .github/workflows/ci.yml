@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # Todas las ramas, no solo main: SECURITY.md promete que la regla de
+  # datos sintéticos se comprueba en cada push, y una promesa que solo
+  # se cumple al fusionar llega tarde.
   push:
-    branches: [main]
   pull_request:
 
 jobs:
