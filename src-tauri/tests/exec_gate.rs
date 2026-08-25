@@ -1,6 +1,10 @@
+mod common;
+
+use auscan_lib::adapters::ToolAdapter;
 use auscan_lib::error::AppError;
-use auscan_lib::exec::validate_targets;
+use auscan_lib::exec::{validate_flags, validate_targets};
 use auscan_lib::scope::{Scope, ScopeKind};
+use common::FakeAdapter;
 
 fn objetivos(scope: &Scope, ips: &[&str]) -> Vec<auscan_lib::scope::ScopedTarget> {
     ips.iter().map(|ip| scope.validate(ip).unwrap()).collect()
@@ -8,6 +12,10 @@ fn objetivos(scope: &Scope, ips: &[&str]) -> Vec<auscan_lib::scope::ScopedTarget
 
 fn scope_198() -> Scope {
     Scope::from_entries(&[(ScopeKind::Allow, "198.51.100.0/24".to_string())]).unwrap()
+}
+
+fn descriptor_de_prueba() -> auscan_lib::adapters::ToolDescriptor {
+    FakeAdapter.descriptor()
 }
 
 #[test]
@@ -86,4 +94,47 @@ fn rechaza_una_ip_no_autorizada_aunque_lleve_espacios_alrededor() {
         validate_targets(&argv, &targets).is_err(),
         "una IP fuera de targets con espacios alrededor debe seguir rechazándose"
     );
+}
+
+#[test]
+fn acepta_banderas_de_la_lista_sin_privilegio() {
+    let d = descriptor_de_prueba();
+    let argv = vec!["-t".to_string(), "-p".to_string()];
+    assert!(validate_flags(&argv, &d, false).is_ok());
+}
+
+#[test]
+fn rechaza_una_bandera_fuera_de_la_lista() {
+    let d = descriptor_de_prueba();
+    let argv = vec!["--script".to_string(), "vuln".to_string()];
+    assert!(matches!(
+        validate_flags(&argv, &d, false),
+        Err(AppError::FlagNotAllowed(_))
+    ));
+}
+
+#[test]
+fn una_bandera_con_needs_privilege_exige_invocacion_privilegiada() {
+    let d = descriptor_de_prueba();
+    let argv = vec!["-x".to_string()];
+    assert!(matches!(
+        validate_flags(&argv, &d, false),
+        Err(AppError::PrivilegeRequired(_))
+    ));
+    assert!(validate_flags(&argv, &d, true).is_ok());
+}
+
+#[test]
+fn una_bandera_con_valor_pegado_casa_por_prefijo() {
+    // Reproduce el caso de la spec: "-PS80,443,22" tiene que casar con
+    // el flag "-PS", no exigir coincidencia exacta.
+    let d = auscan_lib::adapters::ToolDescriptor {
+        allowed_flags: &[auscan_lib::adapters::Flag {
+            name: "-PS",
+            needs_privilege: false,
+        }],
+        ..descriptor_de_prueba()
+    };
+    let argv = vec!["-PS80,443,22".to_string()];
+    assert!(validate_flags(&argv, &d, false).is_ok());
 }

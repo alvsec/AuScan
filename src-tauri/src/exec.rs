@@ -7,6 +7,7 @@
 
 use std::net::IpAddr;
 
+use crate::adapters::ToolDescriptor;
 use crate::error::{AppError, Result};
 use crate::scope::ScopedTarget;
 
@@ -31,6 +32,38 @@ pub fn validate_targets(argv: &[String], targets: &[ScopedTarget]) -> Result<()>
             if host.parse::<IpAddr>().is_ok() && resto.chars().all(|c| c.is_ascii_digit()) {
                 return Err(AppError::UnvalidatedTarget(token.clone()));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Comprobación 2 de la verja: ninguna bandera fuera de
+/// `descriptor.allowed_flags`, y ninguna marcada `needs_privilege` sin
+/// que la invocación sea privilegiada.
+///
+/// Los tokens que ya cubre `validate_targets` (los que parsean como
+/// dirección) se ignoran aquí: lo que queda son banderas. El
+/// emparejamiento es por prefijo, no exacto, porque una bandera puede
+/// llevar un valor pegado (`-PS80,443,22` casa con el flag `-PS`).
+pub fn validate_flags(
+    argv: &[String],
+    descriptor: &ToolDescriptor,
+    invocation_privileged: bool,
+) -> Result<()> {
+    for token in argv {
+        if token.parse::<IpAddr>().is_ok() {
+            continue;
+        }
+        let flag = descriptor
+            .allowed_flags
+            .iter()
+            .find(|f| token.starts_with(f.name));
+        match flag {
+            None => return Err(AppError::FlagNotAllowed(token.clone())),
+            Some(f) if f.needs_privilege && !invocation_privileged => {
+                return Err(AppError::PrivilegeRequired(token.clone()));
+            }
+            Some(_) => {}
         }
     }
     Ok(())

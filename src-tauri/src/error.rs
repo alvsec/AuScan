@@ -26,6 +26,12 @@ pub enum AppError {
     #[error("objetivo sin validar en el comando: {0}")]
     UnvalidatedTarget(String),
 
+    #[error("bandera no permitida: {0}")]
+    FlagNotAllowed(String),
+
+    #[error("la bandera {0} exige la ruta privilegiada")]
+    PrivilegeRequired(String),
+
     #[error("dirección o rango no válido: {0}")]
     InvalidAddress(String),
 

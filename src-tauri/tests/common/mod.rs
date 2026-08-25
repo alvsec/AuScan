@@ -119,6 +119,7 @@ impl ToolAdapter for FakeAdapter {
 
 /// Construye un KnownState y un PhaseOptions vacíos, para los tests que
 /// solo necesitan rellenar `targets` y `scope`.
+#[allow(dead_code)]
 pub fn known_vacio() -> KnownState {
     KnownState::default()
 }
