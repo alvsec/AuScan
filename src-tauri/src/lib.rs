@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod db;
 pub mod engagement;
 pub mod error;
