@@ -123,3 +123,41 @@ impl ToolAdapter for FakeAdapter {
 pub fn known_vacio() -> KnownState {
     KnownState::default()
 }
+
+/// Igual que `FakeAdapter`, pero con dos nombres de binario en el
+/// descriptor en vez de uno.
+///
+/// Existe solo para el test de `check_tool` que demuestra que se
+/// recorren TODOS los binarios del descriptor, no solo el primero: con
+/// el descriptor real de `FakeAdapter` (un único binario) no hay nada a
+/// lo que "caer", así que esa prueba sería vacua. No se toca el
+/// `binaries` de `FakeAdapter::descriptor()` porque
+/// `tests/adapters_trait.rs::descriptor_expone_lo_minimo_para_preflight`
+/// lo comprueba tal cual.
+#[allow(dead_code)]
+pub struct FakeAdapterConDosBinarios;
+
+impl ToolAdapter for FakeAdapterConDosBinarios {
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            binaries: &["nombre-que-no-existe", "fake-tool"],
+            ..FakeAdapter.descriptor()
+        }
+    }
+
+    fn version_argv(&self) -> Vec<String> {
+        FakeAdapter.version_argv()
+    }
+
+    fn parse_version(&self, stdout: &str) -> Result<Version> {
+        FakeAdapter.parse_version(stdout)
+    }
+
+    fn plan(&self, ctx: &PlanContext) -> Result<Vec<Invocation>> {
+        FakeAdapter.plan(ctx)
+    }
+
+    fn parse(&self, raw: &[u8], ctx: &ParseContext) -> Result<Normalized> {
+        FakeAdapter.parse(raw, ctx)
+    }
+}

@@ -3,7 +3,7 @@ mod common;
 use std::path::PathBuf;
 
 use auscan_lib::preflight::{check_tool, ToolStatus};
-use common::FakeAdapter;
+use common::{FakeAdapter, FakeAdapterConDosBinarios};
 
 #[test]
 fn missing_cuando_el_binario_no_se_resuelve_en_ningun_path() {
@@ -68,10 +68,13 @@ fn unparseable_cuando_ejecutar_version_falla() {
 
 #[test]
 fn prueba_todos_los_binarios_del_descriptor_hasta_encontrar_uno() {
-    // resolve() solo conoce un nombre concreto; check_tool debe probar
-    // todos los binarios del descriptor, no solo el primero.
+    // FakeAdapter solo declara un binario, así que no basta para
+    // demostrar el recorrido: FakeAdapterConDosBinarios declara dos
+    // ("nombre-que-no-existe" y "fake-tool"), y resolve() aquí solo
+    // conoce el segundo. Si check_tool se detuviese en el primer
+    // binario del descriptor, este test fallaría con Missing.
     let estado = check_tool(
-        &FakeAdapter,
+        &FakeAdapterConDosBinarios,
         |b| (b == "fake-tool").then(|| PathBuf::from("/usr/local/bin/fake-tool")),
         |_, _| Ok(b"fake-tool 1.0".to_vec()),
     );
