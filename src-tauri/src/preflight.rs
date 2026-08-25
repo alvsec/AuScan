@@ -67,3 +67,93 @@ pub fn check_tool(
         },
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileVaultStatus {
+    On,
+    Off,
+    Unknown,
+}
+
+/// Interpreta la salida de `fdesetup status`. Función pura: la IO real
+/// vive en `filevault_status`, más abajo.
+pub fn parse_filevault_status(fdesetup_stdout: &str) -> FileVaultStatus {
+    let texto = fdesetup_stdout.to_lowercase();
+    if texto.contains("filevault is on") {
+        FileVaultStatus::On
+    } else if texto.contains("filevault is off") {
+        FileVaultStatus::Off
+    } else {
+        FileVaultStatus::Unknown
+    }
+}
+
+pub fn filevault_status() -> FileVaultStatus {
+    #[cfg(target_os = "macos")]
+    {
+        match std::process::Command::new("fdesetup")
+            .arg("status")
+            .output()
+        {
+            Ok(o) => parse_filevault_status(&String::from_utf8_lossy(&o.stdout)),
+            Err(_) => FileVaultStatus::Unknown,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        FileVaultStatus::Unknown
+    }
+}
+
+/// ¿Corre YA el proceso actual con privilegios elevados? No confundir
+/// con "¿podría elevarse?" — eso depende de una capacidad de elevación
+/// que todavía no existe (ADR-0004 sigue en propuesta).
+pub fn running_privileged() -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid() no tiene precondiciones; siempre es segura.
+        unsafe { libc::geteuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconoce_filevault_activado() {
+        assert_eq!(
+            parse_filevault_status("FileVault is On.\n"),
+            FileVaultStatus::On
+        );
+    }
+
+    #[test]
+    fn reconoce_filevault_desactivado() {
+        assert_eq!(
+            parse_filevault_status("FileVault is Off.\n"),
+            FileVaultStatus::Off
+        );
+    }
+
+    #[test]
+    fn una_salida_irreconocible_es_desconocida() {
+        assert_eq!(
+            parse_filevault_status("algo inesperado"),
+            FileVaultStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn el_reconocimiento_no_distingue_mayusculas() {
+        assert_eq!(
+            parse_filevault_status("FILEVAULT IS ON."),
+            FileVaultStatus::On
+        );
+    }
+}

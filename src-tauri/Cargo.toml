@@ -33,3 +33,6 @@ which = "8.0.5"
 tempfile = "3.27.0"
 walkdir = "2.5.0"
 
+[target."cfg(unix)".dependencies]
+libc = "0.2.189"
+
