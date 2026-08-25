@@ -4,6 +4,7 @@ pub mod engagement;
 pub mod error;
 pub mod exec;
 pub mod paths;
+pub mod preflight;
 pub mod scope;
 pub mod state;
 

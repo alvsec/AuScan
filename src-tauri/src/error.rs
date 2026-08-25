@@ -52,6 +52,9 @@ pub enum AppError {
     #[error("la purga dejó restos en {0}")]
     PurgeIncomplete(String),
 
+    #[error("no se encontró la herramienta {0} en el registro")]
+    ToolNotFound(String),
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
