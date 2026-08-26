@@ -92,6 +92,30 @@ fn plan_portsweep_sin_hosts_conocidos_no_produce_nada() {
 }
 
 #[test]
+fn plan_portsweep_rechaza_un_host_conocido_fuera_de_targets() {
+    let scope = scope_198();
+    let objetivo = scope.validate("198.51.100.5").unwrap();
+    // El host conocido (198.51.100.9) no está entre los targets validados.
+    let known = KnownState {
+        hosts: vec![host_de_prueba("198.51.100.9")],
+        services: vec![],
+    };
+    let opciones = PhaseOptions::default();
+    let ctx = PlanContext {
+        phase: Phase::PortSweep,
+        scope: &scope,
+        targets: &[objetivo],
+        known: &known,
+        privileged: false,
+        options: &opciones,
+    };
+    assert!(matches!(
+        Nmap.plan(&ctx),
+        Err(auscan_lib::error::AppError::UnvalidatedTarget(_))
+    ));
+}
+
+#[test]
 fn parse_portsweep_omite_los_puertos_cerrados() {
     let raw = include_bytes!("../../../fixtures/nmap/0003-portsweep.xml");
     let ctx = ParseContext {

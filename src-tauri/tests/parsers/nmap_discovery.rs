@@ -183,3 +183,15 @@ fn parse_discovery_privilegiado_incluye_mac_y_fabricante() {
     assert_eq!(h.mac.as_deref(), Some("02:1a:2b:00:00:05"));
     assert_eq!(h.vendor.as_deref(), Some("Synthetic Devices"));
 }
+
+#[test]
+fn parse_rechaza_una_salida_de_nmap_que_no_termino_con_exito() {
+    let raw = include_bytes!("../../../fixtures/nmap/0005-error.xml");
+    let ctx = ParseContext {
+        tool_run_id: 5,
+        raw_path: "raw/0005-nmap-error.xml",
+        observed_at: "2026-08-26T10:08:00Z",
+    };
+    let err = Nmap.parse(raw, &ctx).unwrap_err();
+    assert!(matches!(err, auscan_lib::error::AppError::ParseFailed(_)));
+}

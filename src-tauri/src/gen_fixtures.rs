@@ -2,8 +2,12 @@
 //! de una captura real. Función pura: sin ella no hay manera de testear
 //! la sustitución sin escribir ficheros reales de por medio.
 //!
-//! IPv6 queda fuera a propósito — mismo alcance que el adaptador de
-//! nmap en esta fase.
+//! Cubre solo IPv4 y MAC — mismo alcance que el adaptador de nmap en
+//! esta fase. Una captura real de nmap también lleva una ruta absoluta
+//! del sistema de ficheros (`xml-stylesheet href="file://..."`) y
+//! nombres de host (PTR) que esta función no toca: son responsabilidad
+//! del operador, igual que ya lo son para el resto de fixtures (el check
+//! de CI no filtra nombres de host a propósito — ver SECURITY.md).
 
 use std::collections::HashMap;
 

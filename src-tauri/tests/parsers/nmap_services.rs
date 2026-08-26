@@ -121,6 +121,31 @@ fn plan_services_ignora_puertos_no_abiertos() {
 }
 
 #[test]
+fn plan_services_rechaza_un_host_conocido_fuera_de_targets() {
+    let scope = scope_198();
+    let objetivo = scope.validate("198.51.100.5").unwrap();
+    // El servicio conocido está en un host (198.51.100.9) que no está
+    // entre los targets validados.
+    let known = KnownState {
+        hosts: vec![],
+        services: vec![servicio_abierto("198.51.100.9", 22)],
+    };
+    let opciones = PhaseOptions::default();
+    let ctx = PlanContext {
+        phase: Phase::Services,
+        scope: &scope,
+        targets: &[objetivo],
+        known: &known,
+        privileged: false,
+        options: &opciones,
+    };
+    assert!(matches!(
+        Nmap.plan(&ctx),
+        Err(auscan_lib::error::AppError::UnvalidatedTarget(_))
+    ));
+}
+
+#[test]
 fn parse_services_completa_producto_version_y_so() {
     let raw = include_bytes!("../../../fixtures/nmap/0004-services.xml");
     let ctx = ParseContext {

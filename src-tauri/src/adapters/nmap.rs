@@ -199,7 +199,12 @@ impl ToolAdapter for Nmap {
             }
             Phase::Services => {
                 let mut por_host: BTreeMap<IpAddr, Vec<u16>> = BTreeMap::new();
-                for s in ctx.known.services.iter().filter(|s| s.state == "open") {
+                for s in ctx
+                    .known
+                    .services
+                    .iter()
+                    .filter(|s| s.state == "open" && s.proto == "tcp")
+                {
                     por_host.entry(s.host_ip).or_default().push(s.port);
                 }
                 let mut invocaciones = Vec::new();
@@ -240,12 +245,15 @@ impl ToolAdapter for Nmap {
 
     fn parse(&self, raw: &[u8], ctx: &ParseContext) -> Result<Normalized> {
         let texto = std::str::from_utf8(raw).map_err(|e| AppError::ParseFailed(e.to_string()))?;
-        // nmap siempre emite `<!DOCTYPE nmaprun>` (sin subconjunto interno
-        // ni ExternalID) delante del elemento raíz. roxmltree rechaza
-        // cualquier DTD por defecto como medida de seguridad frente a
-        // ataques de expansión de entidades; su comprobación de "billion
-        // laughs" sigue activa aunque se permita el DTD, así que habilitarlo
-        // aquí no renuncia a esa protección.
+        // nmap emite `<!DOCTYPE nmaprun>` (sin subconjunto interno ni
+        // ExternalID) delante del elemento raíz en sus salidas normales —
+        // aunque no en la salida de error, que carece por completo de
+        // declaración XML y de DOCTYPE (confirmado contra nmap 7.991 real;
+        // ver el nuevo fixture 0005-error.xml). roxmltree rechaza cualquier
+        // DTD por defecto como medida de seguridad frente a ataques de
+        // expansión de entidades; su comprobación de "billion laughs" sigue
+        // activa aunque se permita el DTD, así que habilitarlo aquí no
+        // renuncia a esa protección.
         let opciones = roxmltree::ParsingOptions {
             allow_dtd: true,
             ..Default::default()
@@ -253,6 +261,31 @@ impl ToolAdapter for Nmap {
         let doc = roxmltree::Document::parse_with_options(texto, opciones)
             .map_err(|e| AppError::ParseFailed(e.to_string()))?;
         let root = doc.root_element();
+
+        if !root.has_tag_name("nmaprun") {
+            return Err(AppError::ParseFailed(format!(
+                "elemento raíz inesperado en {}",
+                ctx.raw_path
+            )));
+        }
+        let salida_exitosa = root
+            .children()
+            .find(|n| n.has_tag_name("runstats"))
+            .and_then(|rs| rs.children().find(|n| n.has_tag_name("finished")))
+            .and_then(|f| f.attribute("exit"))
+            == Some("success");
+        if !salida_exitosa {
+            let motivo = root
+                .children()
+                .find(|n| n.has_tag_name("runstats"))
+                .and_then(|rs| rs.children().find(|n| n.has_tag_name("finished")))
+                .and_then(|f| f.attribute("errormsg"))
+                .unwrap_or("motivo desconocido");
+            return Err(AppError::ParseFailed(format!(
+                "nmap no terminó con éxito en {}: {motivo}",
+                ctx.raw_path
+            )));
+        }
 
         let mut hosts = Vec::new();
         let mut services = Vec::new();
