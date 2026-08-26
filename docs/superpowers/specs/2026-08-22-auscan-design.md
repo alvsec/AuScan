@@ -641,22 +641,93 @@ Fase 5.
 
 ---
 
-## 9. Ejecución, streaming y cancelación
+## 9. Ejecución, streaming y cancelación (Fase 5)
 
-- **Streaming.** El núcleo lee stdout y stderr por líneas y emite eventos Tauri
-  `run:log`, `run:progress` y `run:done`. Las líneas se agrupan en lotes para no
-  saturar el puente; el buffer de log en la UI está acotado, con la salida
-  completa siempre disponible en `raw/`.
-- **Progreso.** `progress_from` indica al núcleo de qué flujo salen las líneas de
-  progreso; `parse_progress` las interpreta. Es específico de cada herramienta y
-  por eso vive en el adaptador.
-- **Cancelación.** El hijo se lanza en su propio grupo de procesos. Cancelar
-  envía `SIGTERM` al grupo y `SIGKILL` tras un plazo de gracia. El `tool_run`
-  queda con `status='cancelled'`, y la salida parcial se conserva marcada como
-  tal — una recolección interrumpida sigue siendo evidencia, y borrarla sería
-  peor que guardarla mal etiquetada.
-- **Timeouts.** Cada `Invocation` trae el suyo; agotarlo es una cancelación con
-  causa registrada.
+### 9.1 Módulos
+
+Tres responsabilidades, tres ficheros:
+
+- **`exec.rs`** (ya existe desde la Fase 3, con la verja). Gana la mecánica de
+  proceso: lanzar el hijo en su propio grupo de procesos, leer stdout/stderr
+  por líneas de forma asíncrona, matar el grupo al cancelar. Sin SQL — sigue
+  siendo el módulo de "esto es lo que hay que comprobar/ejecutar", no el de
+  "esto es lo que se guarda".
+- **`runs.rs`** (nuevo). Toda la persistencia: crear y cerrar filas de
+  `tool_run`, hacer upsert de `host`/`service`, insertar `observation`, y
+  `load_known_state()` para reconstruir el `KnownState` que alimenta el
+  `plan()` de la siguiente fase. Son funciones sobre una `Connection`, sin
+  lanzar ningún proceso — testeables igual que `scope.rs`.
+- **`orchestrator.rs`** (nuevo). El pegamento con estado: arma el
+  `PlanContext`, llama `adapter.plan()`, y por cada `Invocation` encadena
+  verja → spawn → emitir eventos → parsear → persistir. Aquí vive el ciclo de
+  vida completo de una fase de ejecución.
+
+### 9.2 Streaming
+
+El núcleo lee stdout y stderr por líneas y emite eventos Tauri `run:log`,
+`run:progress` y `run:done`. Las líneas se agrupan en lotes para no saturar el
+puente; el buffer de log en la UI está acotado, con la salida completa siempre
+disponible en `raw/`.
+
+### 9.3 Progreso
+
+`progress_from` indica al núcleo de qué flujo salen las líneas de progreso;
+`parse_progress` las interpreta. Es específico de cada herramienta y por eso
+vive en el adaptador.
+
+### 9.4 Cancelación
+
+El hijo se lanza en su propio grupo de procesos (`setpgid` al arrancar, en
+Unix). Cancelar envía `SIGTERM` al grupo y `SIGKILL` tras un plazo de gracia.
+En Windows, sin un equivalente igual de limpio a un grupo de procesos POSIX,
+la cancelación es `Child::kill()` sin paso amable — coherente con que Windows
+ya no recibe tampoco el trabajo de elevación (§8.1). El `tool_run` queda con
+`status='cancelled'`, y la salida parcial se conserva marcada como tal — una
+recolección interrumpida sigue siendo evidencia, y borrarla sería peor que
+guardarla mal etiquetada. La orquestación usa `tokio` (`process`, `io-util`,
+`time`, `sync`) sobre el runtime que Tauri ya trae — las tareas se lanzan con
+`tauri::async_runtime::spawn`, sin montar un segundo runtime.
+
+### 9.5 Timeouts
+
+Cada `Invocation` trae el suyo; agotarlo es una cancelación con causa
+registrada, vía `tokio::time::timeout`.
+
+### 9.6 Tres huecos que cierra esta fase
+
+Todos ledgereados en revisiones de fases anteriores como "requisito de la
+Fase 5":
+
+- **`verja()` deja de fiarse de `Invocation.needs_privilege`.** Gana un
+  parámetro `effective_privileged: bool` que el orquestador rellena con
+  `preflight::running_privileged()` real, no con lo que el adaptador declaró
+  de sí mismo.
+- **`validate_binary` deja de arriesgarse a un falso rechazo por symlinks de
+  Homebrew.** No se canoniza (eso rompería los tests actuales, que usan rutas
+  que no existen en disco) — el orquestador resuelve el binario **una sola
+  vez** y usa esa misma `PathBuf` tanto para lanzar como para comparar. El
+  hueco desaparece por construcción.
+- **Revalidación de versión antes de ejecutar.** Justo antes de cada `spawn`,
+  se repite `--version` contra ese mismo binario y se compara con
+  `min_version` otra vez: si la versión cambió entre el preflight y ahora
+  (un `brew upgrade` de por medio), no se lanza.
+
+### 9.7 Confirmación antes de ejecutar
+
+Antes de lanzar cualquier fase, el operador ve el argv exacto que va a
+correr — la misma línea que quedará en `tool_run.argv_json` — y confirma
+explícitamente. Barato de construir, y coherente con la regla de
+trazabilidad: nada se ejecuta sin que el operador haya visto qué es.
+
+### 9.8 Alcance de la Fase 5
+
+Pantalla de ejecución en vivo (lanzar, ver el log en tiempo real, progreso,
+cancelar) más la capa de persistencia que la hace posible. **Una pantalla de
+resultados navegable —tablas de hosts y servicios— queda fuera de esta fase**
+y se hace cuando la Fase de exportadores ya necesite leer esos mismos datos
+para componer `resumen.md`. La Fase 5 termina en: se lanzó, se vio en vivo, se
+puede cancelar, y al terminar se ve un recuento (N hosts, N servicios, N
+observaciones) — no una tabla explorable.
 
 ---
 
