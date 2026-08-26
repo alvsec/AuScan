@@ -79,6 +79,8 @@ fn parse_es_pura_y_produce_hechos_normalizados() {
 }
 
 #[test]
-fn el_registro_de_produccion_esta_vacio_hasta_la_fase_4() {
-    assert!(auscan_lib::adapters::registry().is_empty());
+fn el_registro_de_produccion_incluye_nmap() {
+    let registro = auscan_lib::adapters::registry();
+    assert_eq!(registro.len(), 1);
+    assert_eq!(registro[0].descriptor().id, "nmap");
 }

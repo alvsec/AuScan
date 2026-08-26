@@ -62,6 +62,9 @@ pub enum AppError {
         stderr: String,
     },
 
+    #[error("no se pudo interpretar la salida de la herramienta: {0}")]
+    ParseFailed(String),
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 

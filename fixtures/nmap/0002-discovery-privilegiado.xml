@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sn -PR -n -oX - 198.51.100.0/29" start="1755000100" startstr="Tue Aug 12 10:01:40 2026" version="7.94" xmloutputversion="1.05">
+<scaninfo type="arp" protocol="arp" numservices="0" services=""/>
+<verbose level="0"/>
+<debugging level="0"/>
+<host starttime="1755000100" endtime="1755000101">
+<status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="198.51.100.5" addrtype="ipv4"/>
+<address addr="02:1a:2b:00:00:05" addrtype="mac" vendor="Synthetic Devices"/>
+<hostnames>
+</hostnames>
+<times srtt="10" rttvar="5" to="100000"/>
+</host>
+<runstats>
+<finished time="1755000101" timestr="Tue Aug 12 10:01:41 2026" elapsed="1.00" summary="Nmap done at Tue Aug 12 10:01:41 2026; 1 IP address (1 host up) scanned in 1.00 seconds" exit="success"/>
+<hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>

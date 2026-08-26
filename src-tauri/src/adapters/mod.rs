@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::scope::{Scope, ScopedTarget};
 
+pub mod nmap;
+
 /// Fase de una auditoría a la que pertenece una invocación.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -232,8 +234,7 @@ pub trait ToolAdapter: Send + Sync {
 }
 
 /// Las herramientas que la app sabe orquestar. Añadir una es un fichero
-/// nuevo y una línea aquí; el núcleo no se toca. Vacío hasta que la
-/// Fase 4 añada el adaptador de nmap.
+/// nuevo y una línea aquí; el núcleo no se toca.
 pub fn registry() -> Vec<Box<dyn ToolAdapter>> {
-    vec![]
+    vec![Box::new(nmap::Nmap)]
 }
