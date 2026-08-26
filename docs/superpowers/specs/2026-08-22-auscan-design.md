@@ -370,6 +370,9 @@ pub struct ToolDescriptor {
 pub struct Flag {
     pub name: &'static str,
     pub needs_privilege: bool,   // -sS y -O solo con la ruta privilegiada
+    pub takes_value: bool,       // el siguiente token del argv es un valor
+                                  // opaco ("1-1000"); la verja lo salta en vez
+                                  // de intentar casarlo como otra bandera
 }
 
 pub enum Phase {
@@ -394,6 +397,7 @@ pub struct Invocation {
 }
 
 pub struct PlanContext<'a> {
+    pub phase:      Phase,               // qué fase pide el operador ahora
     pub scope:      &'a Scope,
     pub targets:    &'a [ScopedTarget],  // ya validados
     pub known:      &'a KnownState,      // hosts y servicios de fases previas
@@ -450,14 +454,19 @@ Además, el núcleo escanea el argv final: todo token que parsee como IP o CIDR
 debe estar en `targets`. Un adaptador que interpole una IP a mano falla
 ruidosamente en vez de escanear a un tercero.
 
-**2 · Ninguna bandera fuera de la lista.** Dos comprobaciones sobre la misma
-lista: todo flag del argv debe estar en `descriptor.allowed_flags`, y todo flag
-marcado `needs_privilege` exige que la invocación sea privilegiada. Convierte la
-regla 4 en algo mecánico: `--script vuln` y los templates intrusivos de nuclei no
-es que estén desaconsejados — no están en la lista y el proceso no arranca; `-sS`
-sí está, pero marcado, y no arranca sin la ruta privilegiada. Y como añadir una
-capacidad activa obliga a tocar una lista corta y visible, aparece como una línea
-señalada en el diff.
+**2 · Ninguna bandera fuera de la lista.** El emparejamiento es por igualdad
+exacta, nunca por prefijo: colisiones como `-s`/`-sS` o `-P`/`-PS`/`-PR` no
+existen porque un token o es exactamente un flag permitido o no lo es. Un flag
+marcado `takes_value` consume el siguiente token del argv como valor opaco sin
+intentar validarlo como bandera — así una lista de puertos nunca se interpreta
+como otra cosa, y una IP sin validar no puede colarse pegada a una bandera.
+Dos comprobaciones sobre la misma lista: todo flag del argv debe estar en
+`descriptor.allowed_flags`, y todo flag marcado `needs_privilege` exige que la
+invocación sea privilegiada. Convierte la regla 4 en algo mecánico: `--script
+vuln` y los templates intrusivos de nuclei no es que estén desaconsejados — no
+están en la lista y el proceso no arranca; `-sS` sí está, pero marcado, y no
+arranca sin la ruta privilegiada. Y como añadir una capacidad activa obliga a
+tocar una lista corta y visible, aparece como una línea señalada en el diff.
 
 **3 · El binario es el resuelto en preflight.** Ruta absoluta, versión
 revalidada. Ni `PATH`, ni un `nmap` aparecido en el directorio actual entre el
@@ -488,6 +497,44 @@ concreta de qué se pierde; nunca fallan a mitad de ejecución.
 El preflight también evalúa la **matriz de capacidades**: privilegios
 disponibles, y en macOS el estado de FileVault, con aviso visible si está
 desactivado (ADR-0003).
+
+### 7.6 El adaptador nmap (Fase 4)
+
+Primer adaptador real. Encadena tres fases del enum `Phase` con un solo
+`ToolAdapter`, usando `ctx.phase` para saber cuál pide el operador y
+`ctx.known` para saber qué hay de fases anteriores:
+
+- **Discovery** — sin privilegio: `-sn -PS80,443,22 -PA80 -n`. Con privilegio:
+  `-sn -PR -n` (ARP, ve todo el segmento). Siempre sobre `ctx.targets`.
+- **PortSweep** — `-Pn -n` sobre `ctx.known.hosts`, sin `-p`: usa el top-1000
+  de nmap por defecto, no barrido completo 1-65535. `-sT` sin privilegio,
+  `-sS` con privilegio.
+- **Services** — `-sV -Pn -n -p <lista exacta>` sobre los puertos de
+  `ctx.known.services` cuyo `state == "open"`, más `-O` si `ctx.privileged`.
+
+Siempre `-oX -` (nunca a fichero: T9) y siempre `-n` (nunca DNS propio de
+nmap). `PhaseOptions.script_scan` (`-sC`) queda en el trait pero esta versión
+no lo usa — parsear salida de scripts NSE es un formato distinto por script y
+se deja fuera hasta que haga falta de verdad.
+
+**IPv6 diferido.** `plan()` filtra `ctx.targets` a IPv4; un target v6 en
+alcance no genera invocación todavía. El guard ya es dual-stack — el hueco es
+solo que el primer adaptador real aún no reparte argv entre `-6` y v4.
+
+**Vocabulario sin ampliar.** `host.discovered`, `host.os_guess`,
+`service.open`, `service.version_disclosed` bastan para nmap v1; no hace
+falta tocar el enum de §5.5.
+
+**Parsing:** `roxmltree` (DOM de solo lectura) sobre la salida de `-oX -`.
+
+**Fixtures:** `fixtures/nmap/*.xml` se escriben a mano con direcciones RFC
+5737, porque el laboratorio Windows de §8.1 todavía no existe. `tools/
+gen-fixtures/` se construye igual en esta fase — toma un XML y una tabla de
+sustitución de direcciones — pero sus propios tests son sintético→sintético
+(RFC 5737 a RFC 5737): el check de fixtures recorre todo el repositorio, no
+solo `fixtures/`, así que no hay manera de commitear ni siquiera un "antes"
+con IPs reales para probarlo. Queda listo y testeado para cuando el
+laboratorio exista.
 
 ---
 
