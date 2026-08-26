@@ -12,7 +12,8 @@ use semver::Version;
 
 use crate::adapters::{
     Flag, HostFact, InstallHint, Invocation, Normalized, ObservationFact, ObservationKind,
-    ParseContext, Phase, PlanContext, ProgressSource, RawSource, ToolAdapter, ToolDescriptor,
+    ParseContext, Phase, PlanContext, ProgressSource, RawSource, ServiceFact, ToolAdapter,
+    ToolDescriptor,
 };
 use crate::error::{AppError, Result};
 use crate::scope::ScopedTarget;
@@ -53,6 +54,21 @@ const ALLOWED_FLAGS: &[Flag] = &[
         needs_privilege: false,
         takes_value: true,
     },
+    Flag {
+        name: "-Pn",
+        needs_privilege: false,
+        takes_value: false,
+    },
+    Flag {
+        name: "-sT",
+        needs_privilege: false,
+        takes_value: false,
+    },
+    Flag {
+        name: "-sS",
+        needs_privilege: true,
+        takes_value: false,
+    },
 ];
 
 pub struct Nmap;
@@ -63,7 +79,7 @@ impl ToolAdapter for Nmap {
             id: "nmap",
             binaries: &["nmap"],
             min_version: Version::new(7, 80, 0),
-            phases: &[Phase::Discovery],
+            phases: &[Phase::Discovery, Phase::PortSweep],
             install_hint: InstallHint {
                 brew: &["install", "nmap"],
                 winget: &["install", "-e", "Insecure.Nmap"],
@@ -132,6 +148,39 @@ impl ToolAdapter for Nmap {
                     timeout: Duration::from_secs(300),
                 }])
             }
+            Phase::PortSweep => {
+                let ips: Vec<IpAddr> = ctx
+                    .known
+                    .hosts
+                    .iter()
+                    .map(|h| h.ip)
+                    .filter(|ip| ip.is_ipv4())
+                    .collect();
+                if ips.is_empty() {
+                    return Ok(vec![]);
+                }
+                let targets = ips
+                    .iter()
+                    .map(|ip| scoped_target_de(ctx, *ip))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut argv = vec!["-Pn".to_string(), "-n".to_string()];
+                argv.push(if ctx.privileged { "-sS" } else { "-sT" }.to_string());
+                argv.push("-oX".to_string());
+                argv.push("-".to_string());
+                for ip in &ips {
+                    argv.push(ip.to_string());
+                }
+                Ok(vec![Invocation {
+                    phase: Phase::PortSweep,
+                    argv,
+                    targets,
+                    needs_privilege: ctx.privileged,
+                    raw_from: RawSource::Stdout,
+                    progress_from: ProgressSource::None,
+                    stdin: None,
+                    timeout: Duration::from_secs(1800),
+                }])
+            }
             _ => Ok(vec![]),
         }
     }
@@ -153,6 +202,7 @@ impl ToolAdapter for Nmap {
         let root = doc.root_element();
 
         let mut hosts = Vec::new();
+        let mut services = Vec::new();
         let mut observations = Vec::new();
 
         for host_node in root.children().filter(|n| n.has_tag_name("host")) {
@@ -223,11 +273,68 @@ impl ToolAdapter for Nmap {
                 )),
                 meta_json: None,
             });
+
+            if let Some(ports_node) = host_node.children().find(|n| n.has_tag_name("ports")) {
+                for port_node in ports_node.children().filter(|n| n.has_tag_name("port")) {
+                    let proto = port_node.attribute("protocol").unwrap_or("tcp").to_string();
+                    let portid: u16 = port_node
+                        .attribute("portid")
+                        .and_then(|s| s.parse().ok())
+                        .ok_or_else(|| {
+                            AppError::ParseFailed(format!("puerto sin portid en {}", ctx.raw_path))
+                        })?;
+                    let pstate = port_node
+                        .children()
+                        .find(|n| n.has_tag_name("state"))
+                        .and_then(|s| s.attribute("state"))
+                        .unwrap_or("unknown")
+                        .to_string();
+                    if pstate != "open" {
+                        continue;
+                    }
+                    let service_node = port_node.children().find(|n| n.has_tag_name("service"));
+                    let service = service_node
+                        .and_then(|s| s.attribute("name"))
+                        .map(|s| s.to_string());
+
+                    services.push(ServiceFact {
+                        host_ip: ip,
+                        port: portid,
+                        proto: proto.clone(),
+                        state: pstate.clone(),
+                        service: service.clone(),
+                        product: None,
+                        version: None,
+                        extrainfo: None,
+                        tunnel: None,
+                        cpe: None,
+                        banner: None,
+                    });
+
+                    observations.push(ObservationFact {
+                        host_ip: Some(ip),
+                        port: Some(portid),
+                        kind: ObservationKind::ServiceOpen,
+                        subject: format!("{ip}:{portid}/{proto}"),
+                        statement: format!(
+                            "Puerto abierto: {}",
+                            service.as_deref().unwrap_or("desconocido")
+                        ),
+                        evidence: Some(texto[port_node.range()].to_string()),
+                        evidence_ref: Some(format!(
+                            "{}#L{}",
+                            ctx.raw_path,
+                            linea_de(texto, port_node.range().start)
+                        )),
+                        meta_json: None,
+                    });
+                }
+            }
         }
 
         Ok(Normalized {
             hosts,
-            services: Vec::new(),
+            services,
             observations,
         })
     }
@@ -235,4 +342,12 @@ impl ToolAdapter for Nmap {
 
 fn linea_de(texto: &str, offset: usize) -> usize {
     texto[..offset].bytes().filter(|&b| b == b'\n').count() + 1
+}
+
+fn scoped_target_de(ctx: &PlanContext, ip: IpAddr) -> Result<ScopedTarget> {
+    ctx.targets
+        .iter()
+        .find(|t| t.ip() == ip)
+        .copied()
+        .ok_or_else(|| AppError::UnvalidatedTarget(ip.to_string()))
 }

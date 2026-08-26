@@ -230,3 +230,40 @@ fn verja_acepta_un_objetivo_autorizado_con_espacios_alrededor() {
         "un objetivo autorizado con espacios no debe rechazarse por la verja combinada"
     );
 }
+
+#[test]
+fn verja_rechaza_syn_scan_sin_privilegio_con_el_descriptor_real_de_nmap() {
+    use auscan_lib::adapters::nmap::Nmap;
+
+    let scope = scope_198();
+    let target = scope.validate("198.51.100.5").unwrap();
+    let d = Nmap.descriptor();
+    let bin = Path::new("/opt/homebrew/bin/nmap");
+
+    let inv = auscan_lib::adapters::Invocation {
+        phase: auscan_lib::adapters::Phase::PortSweep,
+        argv: vec![
+            "-Pn".to_string(),
+            "-n".to_string(),
+            "-sS".to_string(),
+            "-oX".to_string(),
+            "-".to_string(),
+            "198.51.100.5".to_string(),
+        ],
+        targets: vec![target],
+        needs_privilege: false,
+        raw_from: auscan_lib::adapters::RawSource::Stdout,
+        progress_from: auscan_lib::adapters::ProgressSource::None,
+        stdin: None,
+        timeout: std::time::Duration::from_secs(60),
+    };
+    // -sS exige privilegio; la invocación dice que no lo tiene.
+    assert!(matches!(
+        verja(&inv, bin, &d, bin),
+        Err(AppError::PrivilegeRequired(_))
+    ));
+
+    let mut inv_ok = inv;
+    inv_ok.needs_privilege = true;
+    assert!(verja(&inv_ok, bin, &d, bin).is_ok());
+}

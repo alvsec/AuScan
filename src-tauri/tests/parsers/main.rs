@@ -5,3 +5,4 @@
 //! reparte en varios ficheros. Este directorio usa la segunda forma:
 //! un fichero por adaptador declarado aquí como módulo.
 mod nmap_discovery;
+mod nmap_portsweep;
