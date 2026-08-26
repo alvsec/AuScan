@@ -42,39 +42,39 @@ pub fn validate_targets(argv: &[String], targets: &[ScopedTarget]) -> Result<()>
 /// `descriptor.allowed_flags`, y ninguna marcada `needs_privilege` sin
 /// que la invocación sea privilegiada.
 ///
-/// Los tokens que ya cubre `validate_targets` (los que parsean como
-/// dirección) se ignoran aquí: lo que queda son banderas. El
-/// emparejamiento es por prefijo, no exacto, porque una bandera puede
-/// llevar un valor pegado (`-PS80,443,22` casa con el flag `-PS`).
+/// El emparejamiento es por igualdad EXACTA, nunca por prefijo: antes de
+/// este rediseño, `"-sS".starts_with("-s")` colaba `-sS` bajo un
+/// `allowed_flags` que solo pretendía permitir `-s`, y
+/// `"-p198.51.100.200"` colaba una IP sin validar pegada a `-p`. Una
+/// bandera marcada `takes_value` consume el siguiente token del argv
+/// como valor opaco, sin intentar casarlo como otra bandera: así el
+/// valor nunca puede confundirse con un flag ni con una dirección.
 ///
 /// **Límite conocido:** `invocation_privileged` lo pone quien llama, a
 /// partir de `Invocation.needs_privilege` — y ese campo hoy lo fija el
 /// propio adaptador, sin que nada lo verifique contra el privilegio real
-/// del proceso (`preflight::running_privileged()` o equivalente). Es un
-/// hueco identificado y en seguimiento: antes de que la Fase 5 conecte la
-/// ejecución real, quien llame a `verja()` debe pasar un valor derivado
-/// del privilegio efectivo, no de lo que el propio adaptador declare de sí
-/// mismo — si no, un adaptador con un bug (o malicioso) podría marcar
-/// `needs_privilege` y pasar esta comprobación corriendo sin privilegios.
+/// del proceso (`preflight::running_privileged()` o equivalente). Sigue
+/// siendo un requisito de la Fase 5, sin cambios respecto a la Fase 3.
 pub fn validate_flags(
     argv: &[String],
     descriptor: &ToolDescriptor,
     invocation_privileged: bool,
 ) -> Result<()> {
-    for token in argv {
+    let mut i = 0;
+    while i < argv.len() {
+        let token = &argv[i];
         if token.trim().parse::<IpAddr>().is_ok() {
+            i += 1;
             continue;
         }
-        let flag = descriptor
-            .allowed_flags
-            .iter()
-            .find(|f| token.starts_with(f.name));
+        let flag = descriptor.allowed_flags.iter().find(|f| f.name == token);
         match flag {
             None => return Err(AppError::FlagNotAllowed(token.clone())),
             Some(f) if f.needs_privilege && !invocation_privileged => {
                 return Err(AppError::PrivilegeRequired(token.clone()));
             }
-            Some(_) => {}
+            Some(f) if f.takes_value => i += 2,
+            Some(_) => i += 1,
         }
     }
     Ok(())

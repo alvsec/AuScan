@@ -101,7 +101,7 @@ fn rechaza_una_ip_no_autorizada_aunque_lleve_espacios_alrededor() {
 #[test]
 fn acepta_banderas_de_la_lista_sin_privilegio() {
     let d = descriptor_de_prueba();
-    let argv = vec!["-t".to_string(), "-p".to_string()];
+    let argv = vec!["-t".to_string(), "-p".to_string(), "8080".to_string()];
     assert!(validate_flags(&argv, &d, false).is_ok());
 }
 
@@ -127,18 +127,44 @@ fn una_bandera_con_needs_privilege_exige_invocacion_privilegiada() {
 }
 
 #[test]
-fn una_bandera_con_valor_pegado_casa_por_prefijo() {
-    // Reproduce el caso de la spec: "-PS80,443,22" tiene que casar con
-    // el flag "-PS", no exigir coincidencia exacta.
+fn una_bandera_de_valor_exige_un_token_separado_para_el_valor() {
+    // Nuevo contrato: el valor de una bandera `takes_value` es SIEMPRE
+    // un token de argv aparte, nunca pegado al nombre de la bandera.
+    let d = descriptor_de_prueba();
+    let argv = vec!["-p".to_string(), "80,443,22".to_string()];
+    assert!(validate_flags(&argv, &d, false).is_ok());
+}
+
+#[test]
+fn una_ip_pegada_a_una_bandera_de_valor_ya_no_se_cuela() {
+    // Antes del rediseño, "-p198.51.100.200" casaba por prefijo con
+    // "-p". Ahora ese token completo tiene que igualar EXACTAMENTE una
+    // entrada de allowed_flags, y no lo hace.
+    let d = descriptor_de_prueba();
+    let argv = vec!["-p198.51.100.200".to_string()];
+    assert!(matches!(
+        validate_flags(&argv, &d, false),
+        Err(AppError::FlagNotAllowed(_))
+    ));
+}
+
+#[test]
+fn una_bandera_permitida_mas_corta_ya_no_deja_pasar_una_mas_larga() {
+    // Reproduce el caso real de nmap que motivó el rediseño: "-s" y
+    // "-sS" ya no pueden confundirse porque el emparejamiento es exacto.
     let d = auscan_lib::adapters::ToolDescriptor {
         allowed_flags: &[auscan_lib::adapters::Flag {
-            name: "-PS",
+            name: "-s",
             needs_privilege: false,
+            takes_value: false,
         }],
         ..descriptor_de_prueba()
     };
-    let argv = vec!["-PS80,443,22".to_string()];
-    assert!(validate_flags(&argv, &d, false).is_ok());
+    let argv = vec!["-sS".to_string()];
+    assert!(matches!(
+        validate_flags(&argv, &d, false),
+        Err(AppError::FlagNotAllowed(_))
+    ));
 }
 
 #[test]

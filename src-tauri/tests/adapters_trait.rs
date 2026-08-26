@@ -35,6 +35,7 @@ fn plan_construye_una_invocacion_por_cada_objetivo_de_scope() {
     let known = known_vacio();
     let opciones = PhaseOptions::default();
     let ctx = PlanContext {
+        phase: Phase::Discovery,
         scope: &scope,
         targets: &[objetivo],
         known: &known,

@@ -20,14 +20,17 @@ static FLAGS: &[Flag] = &[
     Flag {
         name: "-t",
         needs_privilege: false,
+        takes_value: false,
     },
     Flag {
         name: "-p",
         needs_privilege: false,
+        takes_value: true,
     },
     Flag {
         name: "-x",
         needs_privilege: true,
+        takes_value: false,
     },
 ];
 

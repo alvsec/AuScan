@@ -42,6 +42,10 @@ pub enum Phase {
 pub struct Flag {
     pub name: &'static str,
     pub needs_privilege: bool,
+    /// El siguiente token del argv es un valor opaco de esta bandera
+    /// ("1-1000", "80,443"): `validate_flags` lo salta sin intentar
+    /// casarlo como otra bandera ni como una dirección.
+    pub takes_value: bool,
 }
 
 /// Cómo instalar la herramienta cuando falta, por gestor de paquetes.
@@ -189,6 +193,11 @@ pub struct PhaseOptions {
 }
 
 pub struct PlanContext<'a> {
+    /// Qué fase pide el operador ahora mismo. Sin esto, `plan()` no
+    /// puede distinguir "todavía no se hizo el barrido de puertos" de
+    /// "se hizo y no encontró nada": ambos casos dejan `known` igual de
+    /// vacío en el campo relevante.
+    pub phase: Phase,
     pub scope: &'a Scope,
     pub targets: &'a [ScopedTarget],
     pub known: &'a KnownState,
