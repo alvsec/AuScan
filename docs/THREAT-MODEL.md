@@ -75,15 +75,19 @@ que aparece señalada en el diff.
 `exec.rs` encadena tres comprobaciones puras —`validate_targets`,
 `validate_flags` y `validate_binary`, combinadas en `verja()`— que correrán
 antes de cualquier `spawn` real en cuanto la Fase 5 conecte la ejecución.
-`adapters::registry()` sigue vacío hoy, así que ninguna herramienta puede
-lanzarse todavía, pero la verja en sí ya existe y está testeada de punta a
-punta.
+Desde la Fase 4, `adapters::registry()` ya incluye el adaptador de nmap con
+su lista real de banderas permitidas, pero ningún camino de producción llama
+todavía a `verja()`: esta fase construye y parsea, no ejecuta. La verja en sí
+existe y está testeada de punta a punta, ahora también contra el descriptor
+real de nmap, no solo contra el adaptador de prueba.
 
-**Límite conocido:** el emparejamiento por prefijo de `validate_flags` tiene
-un hueco identificado en esta revisión —no es una lista verdaderamente
-cerrada (p. ej. `-pwn` casaría con `-p`), y una dirección sin validar podría
-colarse pegada a una bandera permitida—. Sigue abierto, en seguimiento para
-cerrarse antes de que aterrice el adaptador de nmap en la Fase 4.
+**Cerrado en la Fase 4:** el emparejamiento de `validate_flags` era por
+prefijo y tenía un hueco identificado en la revisión de la Fase 3 —no era una
+lista verdaderamente cerrada (p. ej. `-pwn` casaría con `-p`), y una dirección
+sin validar podía colarse pegada a una bandera permitida—. Ahora el
+emparejamiento es por igualdad exacta; una bandera marcada `takes_value`
+consume el siguiente token del argv como valor opaco en vez de intentar
+casarlo como otra bandera.
 
 **Límite conocido:** `needs_privilege` se compara hoy contra la propia
 invocación (`Invocation.needs_privilege`, que pone el adaptador), no contra
@@ -92,7 +96,8 @@ bandera privilegiada colada en una ejecución sin privilegios de verdad —
 exigir que quien la llame pase el privilegio efectivo (`running_privileged()`
 o equivalente) queda como requisito de la Fase 5.
 
-**Dónde:** `src-tauri/src/exec.rs` · `src-tauri/tests/exec_gate.rs`
+**Dónde:** `src-tauri/src/exec.rs` · `src-tauri/src/adapters/nmap.rs` ·
+`src-tauri/tests/exec_gate.rs`
 
 ### T5 · Binario suplantado
 

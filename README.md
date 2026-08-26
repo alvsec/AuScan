@@ -31,12 +31,14 @@ parte de la siguiente fase**: hoy esas columnas existen y están vacías.
 ## Estado
 
 En construcción. Ahora mismo existe la fundación: modelo de datos, ciclo de vida
-del engagement, purga verificable y el guard de alcance completo con sus tests.
-**Todavía no lanza ninguna herramienta de auditoría** — eso llega en las Fases
-4 y 5. El preflight sí ejecuta ya comandos propios, locales y de solo lectura
-(la versión de cada herramienta instalada, `fdesetup status` para FileVault)
-para informar al operador antes de empezar; ninguno es una herramienta de red
-ni forma parte de una auditoría.
+del engagement, purga verificable y el guard de alcance completo con sus tests,
+más el primer adaptador real: nmap ya sabe describirse, planificar sus
+invocaciones y parsear su XML de salida. **Todavía no lanza ninguna herramienta
+de auditoría** — eso llega en la Fase 5, cuando el núcleo conecte `verja()` con
+un `spawn` real. El preflight sí ejecuta ya comandos propios, locales y de solo
+lectura (la versión de cada herramienta instalada, `fdesetup status` para
+FileVault) para informar al operador antes de empezar; ninguno es una
+herramienta de red ni forma parte de una auditoría.
 
 ## Cómo está construido
 
