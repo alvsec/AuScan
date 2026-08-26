@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -Pn -n -sV -O -p 22,80,443 -oX - 198.51.100.5" start="1755000300" startstr="Tue Aug 12 10:05:00 2026" version="7.94" xmloutputversion="1.05">
+<scaninfo type="syn" protocol="tcp" numservices="3" services="22,80,443"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<host starttime="1755000300" endtime="1755000320">
+<status state="up" reason="user-set" reason_ttl="0"/>
+<address addr="198.51.100.5" addrtype="ipv4"/>
+<hostnames>
+<hostname name="host5.example" type="PTR"/>
+</hostnames>
+<ports>
+<port protocol="tcp" portid="22">
+<state state="open" reason="syn-ack" reason_ttl="64"/>
+<service name="ssh" product="OpenSSH" version="9.6" extrainfo="Ubuntu Linux; protocol 2.0" method="probed" conf="10"/>
+</port>
+<port protocol="tcp" portid="80">
+<state state="open" reason="syn-ack" reason_ttl="64"/>
+<service name="http" product="nginx" version="1.24.0" method="probed" conf="10"/>
+</port>
+<port protocol="tcp" portid="443">
+<state state="open" reason="syn-ack" reason_ttl="64"/>
+<service name="https" product="nginx" version="1.24.0" tunnel="ssl" method="probed" conf="10">
+<cpe>cpe:/a:nginx:nginx:1.24.0</cpe>
+</service>
+</port>
+</ports>
+<os>
+<osmatch name="Linux 5.0 - 6.1" accuracy="95" line="12345">
+<osclass type="general purpose" vendor="Linux" osfamily="Linux" osgen="5.X" accuracy="95"/>
+</osmatch>
+<osmatch name="Linux 4.15 - 5.6" accuracy="90" line="54321">
+<osclass type="general purpose" vendor="Linux" osfamily="Linux" osgen="4.X" accuracy="90"/>
+</osmatch>
+</os>
+<times srtt="1000" rttvar="500" to="100000"/>
+</host>
+<runstats>
+<finished time="1755000320" timestr="Tue Aug 12 10:05:20 2026" elapsed="20.00" summary="Nmap done at Tue Aug 12 10:05:20 2026; 1 IP address (1 host up) scanned in 20.00 seconds" exit="success"/>
+<hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>

@@ -6,3 +6,4 @@
 //! un fichero por adaptador declarado aquí como módulo.
 mod nmap_discovery;
 mod nmap_portsweep;
+mod nmap_services;

@@ -5,6 +5,7 @@
 //! `ctx.known` para saber qué hay de fases anteriores. IPv6 queda fuera
 //! de esta versión: `plan()` filtra a IPv4 en todas las fases.
 
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -69,6 +70,21 @@ const ALLOWED_FLAGS: &[Flag] = &[
         needs_privilege: true,
         takes_value: false,
     },
+    Flag {
+        name: "-sV",
+        needs_privilege: false,
+        takes_value: false,
+    },
+    Flag {
+        name: "-p",
+        needs_privilege: false,
+        takes_value: true,
+    },
+    Flag {
+        name: "-O",
+        needs_privilege: true,
+        takes_value: false,
+    },
 ];
 
 pub struct Nmap;
@@ -79,7 +95,7 @@ impl ToolAdapter for Nmap {
             id: "nmap",
             binaries: &["nmap"],
             min_version: Version::new(7, 80, 0),
-            phases: &[Phase::Discovery, Phase::PortSweep],
+            phases: &[Phase::Discovery, Phase::PortSweep, Phase::Services],
             install_hint: InstallHint {
                 brew: &["install", "nmap"],
                 winget: &["install", "-e", "Insecure.Nmap"],
@@ -181,6 +197,43 @@ impl ToolAdapter for Nmap {
                     timeout: Duration::from_secs(1800),
                 }])
             }
+            Phase::Services => {
+                let mut por_host: BTreeMap<IpAddr, Vec<u16>> = BTreeMap::new();
+                for s in ctx.known.services.iter().filter(|s| s.state == "open") {
+                    por_host.entry(s.host_ip).or_default().push(s.port);
+                }
+                let mut invocaciones = Vec::new();
+                for (ip, mut puertos) in por_host {
+                    puertos.sort_unstable();
+                    puertos.dedup();
+                    let target = scoped_target_de(ctx, ip)?;
+                    let lista = puertos
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let mut argv = vec!["-Pn".to_string(), "-n".to_string(), "-sV".to_string()];
+                    if ctx.privileged {
+                        argv.push("-O".to_string());
+                    }
+                    argv.push("-p".to_string());
+                    argv.push(lista);
+                    argv.push("-oX".to_string());
+                    argv.push("-".to_string());
+                    argv.push(ip.to_string());
+                    invocaciones.push(Invocation {
+                        phase: Phase::Services,
+                        argv,
+                        targets: vec![target],
+                        needs_privilege: ctx.privileged,
+                        raw_from: RawSource::Stdout,
+                        progress_from: ProgressSource::None,
+                        stdin: None,
+                        timeout: Duration::from_secs(900),
+                    });
+                }
+                Ok(invocaciones)
+            }
             _ => Ok(vec![]),
         }
     }
@@ -249,13 +302,24 @@ impl ToolAdapter for Nmap {
                 .and_then(|h| h.attribute("name"))
                 .map(|s| s.to_string());
 
+            let osmatch_node = host_node
+                .children()
+                .find(|n| n.has_tag_name("os"))
+                .and_then(|os| os.children().find(|n| n.has_tag_name("osmatch")));
+            let os_guess = osmatch_node
+                .and_then(|m| m.attribute("name"))
+                .map(|s| s.to_string());
+            let os_accuracy = osmatch_node
+                .and_then(|m| m.attribute("accuracy"))
+                .and_then(|s| s.parse::<i64>().ok());
+
             hosts.push(HostFact {
                 ip,
                 hostname,
                 mac,
                 vendor,
-                os_guess: None,
-                os_accuracy: None,
+                os_guess: os_guess.clone(),
+                os_accuracy,
                 state: Some("up".to_string()),
             });
 
@@ -273,6 +337,24 @@ impl ToolAdapter for Nmap {
                 )),
                 meta_json: None,
             });
+
+            if let (Some(m), Some(nombre), Some(precision)) = (osmatch_node, &os_guess, os_accuracy)
+            {
+                observations.push(ObservationFact {
+                    host_ip: Some(ip),
+                    port: None,
+                    kind: ObservationKind::HostOsGuess,
+                    subject: ip.to_string(),
+                    statement: format!("SO estimado: {nombre} (confianza {precision}%)"),
+                    evidence: Some(texto[m.range()].to_string()),
+                    evidence_ref: Some(format!(
+                        "{}#L{}",
+                        ctx.raw_path,
+                        linea_de(texto, m.range().start)
+                    )),
+                    meta_json: None,
+                });
+            }
 
             if let Some(ports_node) = host_node.children().find(|n| n.has_tag_name("ports")) {
                 for port_node in ports_node.children().filter(|n| n.has_tag_name("port")) {
@@ -296,6 +378,22 @@ impl ToolAdapter for Nmap {
                     let service = service_node
                         .and_then(|s| s.attribute("name"))
                         .map(|s| s.to_string());
+                    let product = service_node
+                        .and_then(|s| s.attribute("product"))
+                        .map(|s| s.to_string());
+                    let version = service_node
+                        .and_then(|s| s.attribute("version"))
+                        .map(|s| s.to_string());
+                    let extrainfo = service_node
+                        .and_then(|s| s.attribute("extrainfo"))
+                        .map(|s| s.to_string());
+                    let tunnel = service_node
+                        .and_then(|s| s.attribute("tunnel"))
+                        .map(|s| s.to_string());
+                    let cpe = service_node
+                        .and_then(|sn| sn.children().find(|n| n.has_tag_name("cpe")))
+                        .and_then(|c| c.text())
+                        .map(|s| s.to_string());
 
                     services.push(ServiceFact {
                         host_ip: ip,
@@ -303,11 +401,11 @@ impl ToolAdapter for Nmap {
                         proto: proto.clone(),
                         state: pstate.clone(),
                         service: service.clone(),
-                        product: None,
-                        version: None,
-                        extrainfo: None,
-                        tunnel: None,
-                        cpe: None,
+                        product: product.clone(),
+                        version: version.clone(),
+                        extrainfo,
+                        tunnel,
+                        cpe,
                         banner: None,
                     });
 
@@ -328,6 +426,27 @@ impl ToolAdapter for Nmap {
                         )),
                         meta_json: None,
                     });
+
+                    if let Some(p) = &product {
+                        let estamento = match &version {
+                            Some(v) => format!("{p} {v}"),
+                            None => p.clone(),
+                        };
+                        observations.push(ObservationFact {
+                            host_ip: Some(ip),
+                            port: Some(portid),
+                            kind: ObservationKind::ServiceVersionDisclosed,
+                            subject: format!("{ip}:{portid}/{proto}"),
+                            statement: estamento,
+                            evidence: service_node.map(|sn| texto[sn.range()].to_string()),
+                            evidence_ref: Some(format!(
+                                "{}#L{}",
+                                ctx.raw_path,
+                                linea_de(texto, port_node.range().start)
+                            )),
+                            meta_json: None,
+                        });
+                    }
                 }
             }
         }
