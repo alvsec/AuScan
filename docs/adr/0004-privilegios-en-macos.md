@@ -1,10 +1,6 @@
 # ADR-0004: Privilegios en macOS
 
-**Fecha:** 2026-08-22 · **Estado:** PROPUESTA — pendiente del spike
-
-> Este ADR se cierra cuando exista el resultado empírico del spike descrito
-> abajo. Escribir ahora una decisión que aún no se ha tomado sería peor que
-> dejarlo abierto.
+**Fecha:** 2026-08-22 · **Resuelto:** 2026-08-27 · **Estado:** RESUELTA — B (elevación por ejecución) es necesaria
 
 ## Contexto
 
@@ -60,6 +56,76 @@ Procedimiento, en red propia:
 
 **Si coinciden:** macOS trabaja sin privilegios de verdad y B queda como camino
 raro. **Si no:** B deja de ser opcional.
+
+## Resultado del spike
+
+Ejecutado en red propia (192.168.1.0/24), 2026-08-27. macOS 26.5.2 (25F84),
+nmap 7.991. ChmodBPF instalado y verificado (usuario en el grupo `access_bpf`,
+`/dev/bpf*` con permisos de grupo).
+
+**Sin privilegios:**
+
+```
+$ nmap -sn -PR --send-eth 192.168.1.0/24
+Nmap scan report for 192.168.1.1
+Host is up (0.012s latency).
+Nmap scan report for 192.168.1.136
+Host is up (0.0023s latency).
+Nmap done: 256 IP addresses (2 hosts up) scanned in 22.56 seconds
+```
+
+**Con privilegios (`sudo`), mismo comando:**
+
+```
+$ sudo nmap -sn -PR --send-eth 192.168.1.0/24
+Nmap scan report for 192.168.1.1
+Host is up (0.059s latency).
+MAC Address: 20:3A:EB:A4:89:CA (zte)
+Nmap scan report for 192.168.1.133
+Host is up (0.13s latency).
+MAC Address: 82:F7:6B:74:DE:92 (Unknown)
+Nmap scan report for 192.168.1.140
+Host is up (0.13s latency).
+MAC Address: AC:F4:2C:83:AD:D9 (Earda Technologies)
+Nmap scan report for 192.168.1.170
+Host is up (0.17s latency).
+MAC Address: A0:D0:DC:66:84:CC (Amazon Technologies)
+Nmap scan report for 192.168.1.136
+Host is up.
+Nmap done: 256 IP addresses (5 hosts up) scanned in 4.93 seconds
+```
+
+**No coinciden, en tres sentidos:**
+
+1. **Recuento.** 2 hosts sin privilegios frente a 5 con `sudo` — tres
+   dispositivos reales del segmento (`.133`, `.140`, `.170`) desaparecen sin
+   root. Es exactamente el agujero de inventario que este ADR anticipaba.
+2. **Identidad.** Ninguno de los dos hosts que sí aparecen sin privilegios
+   trae MAC ni fabricante; los cinco con `sudo` sí. Esa es la firma de que
+   `--send-eth` no está construyendo tramas Ethernet reales sin root:
+   ChmodBPF no bastó para dárselo a nmap en esta máquina.
+3. **Velocidad.** 22.56 s sin privilegios frente a 4.93 s con `sudo`, pese a
+   que este último encuentra más hosts. Un ARP real barre un /24 en segundos;
+   22 segundos con menos resultados es la firma de una sonda TCP/ICMP de
+   reserva, no de ARP.
+
+## Decisión
+
+**B (elevación por ejecución) deja de ser opcional.** ChmodBPF por sí solo no
+da a nmap acceso a paquetes crudos sin root en esta configuración. La fase de
+elevación —antes condicional y numerada "Fase 9"— sube en el plan a justo
+detrás de la Fase 5 (§14 de la spec), tal y como este mismo ADR preveía para
+este resultado.
+
+Esto no cambia nada de lo ya diseñado para la Fase 5: `PlanContext.privileged`
+sigue saliendo de `running_privileged()` real, que en la práctica seguirá
+siendo `false` hasta que la fase de elevación exista. La Fase 5 se implementa
+igual que si el spike no se hubiera corrido; lo único que cambia es qué fase
+viene justo después.
+
+No se ha probado el equivalente en Windows (Npcap sin restricción a
+administradores) — sigue pendiente si en algún momento se retoma trabajo de
+descubrimiento en esa plataforma, aunque no es donde se hacen las auditorías.
 
 ## Invariantes que se mantienen pase lo que pase
 

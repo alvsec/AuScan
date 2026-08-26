@@ -617,22 +617,27 @@ Dos detalles que se mantienen pase lo que pase, porque son gratis:
   alcance: son ejes independientes y el guard es el mismo objeto en ambos
   caminos.
 
-### 8.6 Spike previo (Fase 0)
+### 8.6 Spike previo (Fase 0) — ✅ completado 2026-08-27
 
-Existe una vía que **no se da por buena sin verificar**: ChmodBPF (el `launchd`
-que instala Wireshark) abre `/dev/bpf*` a un grupo y, combinado con
+Existía una vía que **no se daba por buena sin verificar**: ChmodBPF (el
+`launchd` que instala Wireshark) abre `/dev/bpf*` a un grupo y, combinado con
 `--send-eth`, podría permitir SYN y ARP sin root en el segmento local. Su
 equivalente en Windows es instalar Npcap **sin** la opción de restringir el
 driver a administradores, que es una casilla soportada del instalador y no un
-apaño.
+apaño — ese lado de la pregunta sigue sin probarse, porque no es donde se hacen
+las auditorías.
 
-Son las dos caras de la misma pregunta: *¿se pueden tener raw packets sin ser
-root?* Se resuelve empíricamente en la red propia, sin cliente y sin esperar a
-nadie, y el resultado se escribe en ADR-0004:
+Era la misma pregunta en las dos plataformas: *¿se pueden tener raw packets sin
+ser root?* Se resolvió empíricamente en la red propia del consultor, sin
+cliente y sin esperar a nadie. **Resultado: no.** Con ChmodBPF instalado y el
+usuario en el grupo `access_bpf`, `nmap -sn -PR --send-eth` sin `sudo` encontró
+2 de 5 hosts reales del segmento, sin MAC ni fabricante en ninguno, y tardó más
+de cuatro veces lo que la misma orden con `sudo` — la firma de una sonda de
+reserva, no de ARP real. Evidencia completa y análisis en
+[ADR-0004](adr/0004-privilegios-en-macos.md).
 
-- **Si sale bien:** macOS trabaja sin privilegios de verdad, no en modo
-  degradado. B queda como camino raro y baja a Fase 9.
-- **Si sale mal:** B deja de ser opcional y sube justo detrás de la Fase 5.
+B deja de ser opcional y sube en el plan de fases (§14) a justo detrás de la
+Fase 5.
 
 ---
 
@@ -765,7 +770,8 @@ partiendo de escaneos del laboratorio propio con las direcciones reescritas.
 - `purge.rs` — tras purgar, el path no existe y no queda nada en otros sitios.
 - Verja — un adaptador de prueba que intenta colar una IP interpolada, una
   bandera no permitida y un binario distinto: los tres deben fallar.
-- Quoter de AppleScript (si entra la Fase 9).
+- Quoter de AppleScript — la Fase 0 confirmó que la elevación hace falta, así
+  que esto entra sí o sí, en la fase de elevación (§14).
 
 **CI (GitHub Actions):** lint · typecheck · tests · build en macOS y Windows ·
 paridad de claves i18n es/en · regla de rangos RFC en `fixtures/` · **ausencia de
@@ -784,16 +790,16 @@ retrofiteándolo.
 
 | Fase | Contenido |
 |---|---|
-| **0** | **Spike de privilegios** (macOS ChmodBPF + `--send-eth`; Windows Npcap sin restricción). Salida: ADR-0004. No bloquea código, sí decide la posición de la Fase 9 |
-| 1 | Scaffold Tauri + modelo de datos + migraciones + i18n + ADRs |
-| 2 | Alcance + guard `in_scope` + tests + espejo TS con test de paridad |
-| 3 | Trait de adaptador + verja + detección de herramientas + pantalla de preflight |
-| 4 | Adaptador nmap (descubrimiento y servicios), parser XML, fixtures sintéticos, `gen-fixtures` |
+| **0** | ✅ **Spike de privilegios** (macOS ChmodBPF + `--send-eth`; Windows Npcap sin restricción). Completado 2026-08-27: ChmodBPF no basta, hace falta elevación — ver [ADR-0004](adr/0004-privilegios-en-macos.md) |
+| 1 | ✅ Scaffold Tauri + modelo de datos + migraciones + i18n + ADRs |
+| 2 | ✅ Alcance + guard `in_scope` + tests + espejo TS con test de paridad |
+| 3 | ✅ Trait de adaptador + verja + detección de herramientas + pantalla de preflight |
+| 4 | ✅ Adaptador nmap (descubrimiento y servicios), parser XML, fixtures sintéticos, `gen-fixtures` |
 | 5 | UI de ejecución: streaming, progreso, cancelación |
-| 6 | Exportadores + `resumen.md` |
-| 7 | Purga + auditoría de privacidad |
-| 8 | Adaptadores httpx y nuclei |
-| 9 | Elevación de privilegios — **solo si la Fase 0 concluye que hace falta**; en ese caso sube detrás de la Fase 5 |
+| 6 | Elevación de privilegios — antes condicional ("Fase 9"); el spike de la Fase 0 la confirmó necesaria, así que sube aquí, justo detrás de la Fase 5 |
+| 7 | Exportadores + `resumen.md` |
+| 8 | Purga + auditoría de privacidad |
+| 9 | Adaptadores httpx y nuclei |
 | 10 | Empaquetado, firma y notarización en macOS |
 
 Un commit por fase, `npm run check` en verde al final de cada una, parada a
