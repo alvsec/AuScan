@@ -3,6 +3,7 @@ pub mod db;
 pub mod engagement;
 pub mod error;
 pub mod exec;
+pub mod gen_fixtures;
 pub mod paths;
 pub mod preflight;
 pub mod scope;

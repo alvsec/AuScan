@@ -82,6 +82,7 @@ version = "0.1.0"
 dependencies = [
  "ipnet",
  "libc",
+ "regex",
  "roxmltree",
  "rusqlite",
  "semver",
