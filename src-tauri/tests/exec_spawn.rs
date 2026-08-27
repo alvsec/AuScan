@@ -143,10 +143,19 @@ async fn ejecutar_se_cancela_al_agotar_el_timeout() {
 }
 
 #[tokio::test]
-async fn cancelar_ya_disparado_antes_de_lanzar_tambien_para_el_proceso() {
-    // Prueba justo la razón de usar CancellationToken en vez de Notify:
-    // un token ya cancelado ANTES de empezar debe seguir contando como
-    // cancelado, no perderse.
+async fn ejecutar_se_cancela_si_el_token_ya_estaba_cancelado_antes_de_empezar() {
+    // Esto prueba que un token cancelado ANTES de arrancar sigue
+    // contando como cancelado, no se pierde. Ojo: esto NO distingue por
+    // sí solo CancellationToken de Notify -- para esta única invocación,
+    // un Notify con un permiso ya guardado (notify_one() antes de que
+    // nadie esperase) pasaría este mismo caso igual de bien. La razón
+    // real para usar CancellationToken es que se mantiene cancelado a
+    // través de VARIAS invocaciones seguidas de ejecutar() dentro de una
+    // misma fase (p. ej. Services, una por host) -- con Notify, la
+    // invocación 2 consumiría el permiso guardado y la 3 arrancaría
+    // fresca, sin verlo. Esa propiedad no es comprobable en aislamiento
+    // aquí: hará falta una prueba real el día que exista un llamador que
+    // invoque ejecutar() más de una vez por fase.
     let cancelar = CancellationToken::new();
     cancelar.cancel();
     let script = dormir_mucho();
