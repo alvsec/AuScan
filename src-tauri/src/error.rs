@@ -62,6 +62,13 @@ pub enum AppError {
         stderr: String,
     },
 
+    #[error("{tool} está en {actual}, pero esta fase exige al menos {minimo}")]
+    ToolVersionInsuficiente {
+        tool: String,
+        actual: String,
+        minimo: String,
+    },
+
     #[error("no se pudo interpretar la salida de la herramienta: {0}")]
     ParseFailed(String),
 
