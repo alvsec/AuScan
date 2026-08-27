@@ -1,0 +1,60 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// `invoke` sigue el mismo patrón `vi.hoisted` que Preflight.test.tsx,
+// Scope.test.tsx y Engagements.test.tsx ya usan para mockear
+// "@tauri-apps/api/core" en este proyecto.
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
+// No hay ningún mock previo de "@tauri-apps/api/event" en este proyecto
+// (ningún otro store/página escucha eventos todavía), así que no hay un
+// patrón establecido que seguir aquí. `listeners` guarda el callback que
+// el store registra con `listen(nombre, cb)` para poder dispararlo a mano
+// desde el test, como si el backend hubiera emitido el evento.
+const listeners: Record<string, (evento: { payload: unknown }) => void> = {};
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((nombre: string, cb: (evento: { payload: unknown }) => void) => {
+    listeners[nombre] = cb;
+    return Promise.resolve(() => {
+      delete listeners[nombre];
+    });
+  }),
+}));
+
+import { useRunStore } from "./useRunStore";
+
+describe("useRunStore", () => {
+  beforeEach(() => {
+    useRunStore.setState({ estado: "inactivo", lineas: [], runsTerminados: [], error: null });
+    invoke.mockReset();
+  });
+
+  it("pasa a corriendo y limpia el estado anterior al iniciar", async () => {
+    invoke.mockResolvedValue(undefined);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    expect(useRunStore.getState().estado).toBe("corriendo");
+    expect(useRunStore.getState().lineas).toEqual([]);
+  });
+
+  it("acumula líneas de log según llegan por el evento run:log", async () => {
+    invoke.mockResolvedValue(undefined);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    listeners["run:log"]!({ payload: { origen: "stdout", texto: "hola" } });
+    expect(useRunStore.getState().lineas).toEqual([{ origen: "stdout", texto: "hola" }]);
+  });
+
+  it("vuelve a inactivo cuando llega run:fase-terminada", async () => {
+    invoke.mockResolvedValue(undefined);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    listeners["run:fase-terminada"]!({ payload: undefined });
+    expect(useRunStore.getState().estado).toBe("inactivo");
+  });
+
+  it("guarda el error y vuelve a inactivo si start falla", async () => {
+    invoke.mockRejectedValue("fuera de alcance");
+    await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"]);
+    expect(useRunStore.getState().error).toBe("fuera de alcance");
+    expect(useRunStore.getState().estado).toBe("inactivo");
+  });
+});
