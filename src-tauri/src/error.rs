@@ -65,6 +65,9 @@ pub enum AppError {
     #[error("no se pudo interpretar la salida de la herramienta: {0}")]
     ParseFailed(String),
 
+    #[error("los datos parseados son inconsistentes: {0}")]
+    InconsistentParse(String),
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 

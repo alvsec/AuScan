@@ -6,6 +6,7 @@ pub mod exec;
 pub mod gen_fixtures;
 pub mod paths;
 pub mod preflight;
+pub mod runs;
 pub mod scope;
 pub mod state;
 
