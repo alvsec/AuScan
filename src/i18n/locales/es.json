@@ -5,7 +5,8 @@
   "nav": {
     "engagements": "Engagements",
     "scope": "Alcance",
-    "preflight": "Herramientas"
+    "preflight": "Herramientas",
+    "run": "Ejecución"
   },
   "preflight": {
     "title": "Herramientas",
@@ -62,5 +63,18 @@
     },
     "kind": "Tipo de entrada",
     "entry": "Rango o dirección"
+  },
+  "run": {
+    "titulo": "Ejecución",
+    "objetivos": "Objetivos (uno por línea)",
+    "fase": "Fase",
+    "confirmarTitulo": "Se va a ejecutar",
+    "confirmarBoton": "Ejecutar",
+    "cancelarBoton": "Cancelar edición",
+    "lanzarBoton": "Lanzar",
+    "cancelarEjecucionBoton": "Cancelar ejecución",
+    "corriendo": "Corriendo…",
+    "sinLineas": "Sin salida todavía.",
+    "recuento": "{{n}} líneas de log"
   }
 }

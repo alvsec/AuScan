@@ -5,7 +5,8 @@
   "nav": {
     "engagements": "Engagements",
     "scope": "Scope",
-    "preflight": "Tools"
+    "preflight": "Tools",
+    "run": "Run"
   },
   "preflight": {
     "title": "Tools",
@@ -62,5 +63,18 @@
     },
     "kind": "Entry type",
     "entry": "Range or address"
+  },
+  "run": {
+    "titulo": "Run",
+    "objetivos": "Targets (one per line)",
+    "fase": "Phase",
+    "confirmarTitulo": "About to run",
+    "confirmarBoton": "Run",
+    "cancelarBoton": "Cancel editing",
+    "lanzarBoton": "Launch",
+    "cancelarEjecucionBoton": "Cancel execution",
+    "corriendo": "Running…",
+    "sinLineas": "No output yet.",
+    "recuento": "{{n}} log lines"
   }
 }

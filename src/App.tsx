@@ -3,9 +3,10 @@ import { useTranslation } from "react-i18next";
 
 import { Engagements } from "./pages/Engagements";
 import { Preflight } from "./pages/Preflight";
+import { Run } from "./pages/Run";
 import { Scope } from "./pages/Scope";
 
-type Pantalla = "preflight" | "engagements" | "scope";
+type Pantalla = "preflight" | "engagements" | "scope" | "run";
 
 export default function App() {
   const { t } = useTranslation();
@@ -23,10 +24,14 @@ export default function App() {
         <button type="button" onClick={() => setPantalla("scope")}>
           {t("nav.scope")}
         </button>
+        <button type="button" onClick={() => setPantalla("run")}>
+          {t("nav.run")}
+        </button>
       </nav>
       {pantalla === "preflight" && <Preflight />}
       {pantalla === "engagements" && <Engagements />}
       {pantalla === "scope" && <Scope />}
+      {pantalla === "run" && <Run />}
     </main>
   );
 }
