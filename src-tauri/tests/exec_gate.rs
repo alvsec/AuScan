@@ -200,13 +200,13 @@ fn verja_encadena_las_tres_comprobaciones_en_orden() {
         stdin: None,
         timeout: std::time::Duration::from_secs(5),
     };
-    assert!(verja(&inv_ok, bin, &d, bin).is_ok());
+    assert!(verja(&inv_ok, bin, &d, bin, false).is_ok());
 
     // Un objetivo que no está en inv.targets debe seguir tumbando la
     // verja aunque el binario y las banderas sean correctos.
     let mut inv_mal = inv_ok;
     inv_mal.argv.push("198.51.100.200".to_string());
-    assert!(verja(&inv_mal, bin, &d, bin).is_err());
+    assert!(verja(&inv_mal, bin, &d, bin, false).is_err());
 }
 
 #[test]
@@ -226,13 +226,13 @@ fn verja_acepta_un_objetivo_autorizado_con_espacios_alrededor() {
         timeout: std::time::Duration::from_secs(5),
     };
     assert!(
-        verja(&inv, bin, &d, bin).is_ok(),
+        verja(&inv, bin, &d, bin, false).is_ok(),
         "un objetivo autorizado con espacios no debe rechazarse por la verja combinada"
     );
 }
 
 #[test]
-fn verja_rechaza_syn_scan_sin_privilegio_con_el_descriptor_real_de_nmap() {
+fn verja_usa_el_privilegio_efectivo_no_lo_que_declara_el_adaptador() {
     use auscan_lib::adapters::nmap::Nmap;
 
     let scope = scope_198();
@@ -240,7 +240,7 @@ fn verja_rechaza_syn_scan_sin_privilegio_con_el_descriptor_real_de_nmap() {
     let d = Nmap.descriptor();
     let bin = Path::new("/opt/homebrew/bin/nmap");
 
-    let inv = auscan_lib::adapters::Invocation {
+    let mut inv = auscan_lib::adapters::Invocation {
         phase: auscan_lib::adapters::Phase::PortSweep,
         argv: vec![
             "-Pn".to_string(),
@@ -251,19 +251,26 @@ fn verja_rechaza_syn_scan_sin_privilegio_con_el_descriptor_real_de_nmap() {
             "198.51.100.5".to_string(),
         ],
         targets: vec![target],
-        needs_privilege: false,
+        needs_privilege: true, // el adaptador DICE que es privilegiada
         raw_from: auscan_lib::adapters::RawSource::Stdout,
         progress_from: auscan_lib::adapters::ProgressSource::None,
         stdin: None,
         timeout: std::time::Duration::from_secs(60),
     };
-    // -sS exige privilegio; la invocación dice que no lo tiene.
+
+    // Aunque needs_privilege diga true, si el privilegio EFECTIVO es
+    // false, -sS sigue sin poder ejecutarse: la verja no se fía de la
+    // autocertificación del adaptador.
     assert!(matches!(
-        verja(&inv, bin, &d, bin),
+        verja(&inv, bin, &d, bin, false),
         Err(AppError::PrivilegeRequired(_))
     ));
 
-    let mut inv_ok = inv;
-    inv_ok.needs_privilege = true;
-    assert!(verja(&inv_ok, bin, &d, bin).is_ok());
+    // Con el privilegio efectivo en true, sí se acepta.
+    assert!(verja(&inv, bin, &d, bin, true).is_ok());
+
+    // Y al revés: needs_privilege en false no cambia nada por sí solo
+    // si el argv sigue llevando -sS con privilegio efectivo real.
+    inv.needs_privilege = false;
+    assert!(verja(&inv, bin, &d, bin, true).is_ok());
 }

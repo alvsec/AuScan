@@ -50,11 +50,11 @@ pub fn validate_targets(argv: &[String], targets: &[ScopedTarget]) -> Result<()>
 /// como valor opaco, sin intentar casarlo como otra bandera: así el
 /// valor nunca puede confundirse con un flag ni con una dirección.
 ///
-/// **Límite conocido:** `invocation_privileged` lo pone quien llama, a
-/// partir de `Invocation.needs_privilege` — y ese campo hoy lo fija el
-/// propio adaptador, sin que nada lo verifique contra el privilegio real
-/// del proceso (`preflight::running_privileged()` o equivalente). Sigue
-/// siendo un requisito de la Fase 5, sin cambios respecto a la Fase 3.
+/// **Cerrado en la Fase 5:** `invocation_privileged` lo pone quien
+/// llama. Antes de esta fase, la única llamadora (`verja()`) lo sacaba
+/// de `Invocation.needs_privilege` — el propio adaptador
+/// autocertificándose. Ahora `verja()` recibe el privilegio efectivo
+/// del proceso como parámetro explícito y es eso lo que llega aquí.
 pub fn validate_flags(
     argv: &[String],
     descriptor: &ToolDescriptor,
@@ -93,17 +93,26 @@ pub fn validate_binary(binary_path: &Path, expected_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Las tres comprobaciones juntas, en el orden en que la Fase 5 las
-/// llamará antes de cada `spawn`, para todos los adaptadores, sin
-/// excepción.
+/// Las tres comprobaciones juntas, en el orden en que el orquestador las
+/// llama antes de cada `spawn`, para todos los adaptadores, sin excepción.
+///
+/// `effective_privileged` es el privilegio REAL del proceso en este
+/// instante (`preflight::running_privileged()` o equivalente) — nunca
+/// `invocation.needs_privilege`, que lo declara el propio adaptador. Un
+/// adaptador con un fallo (o malicioso) podría marcar `needs_privilege`
+/// y aun así intentar ejecutarse sin privilegios de verdad si esta
+/// función se fiase de esa autocertificación; por eso el privilegio
+/// efectivo entra como parámetro aparte, puesto por quien tiene
+/// autoridad para saberlo.
 pub fn verja(
     invocation: &Invocation,
     binary_path: &Path,
     descriptor: &ToolDescriptor,
     expected_path: &Path,
+    effective_privileged: bool,
 ) -> Result<()> {
     validate_targets(&invocation.argv, &invocation.targets)?;
-    validate_flags(&invocation.argv, descriptor, invocation.needs_privilege)?;
+    validate_flags(&invocation.argv, descriptor, effective_privileged)?;
     validate_binary(binary_path, expected_path)?;
     Ok(())
 }
