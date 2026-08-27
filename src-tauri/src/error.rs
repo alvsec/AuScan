@@ -55,6 +55,9 @@ pub enum AppError {
     #[error("la purga dejó restos en {0}")]
     PurgeIncomplete(String),
 
+    #[error("ya hay una ejecución en marcha")]
+    RunAlreadyActive,
+
     #[error("no se encontró la herramienta {0} en el registro")]
     ToolNotFound(String),
 

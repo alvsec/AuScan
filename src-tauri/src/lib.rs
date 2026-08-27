@@ -134,6 +134,31 @@ fn fase_desde_str(s: &str) -> Result<Phase> {
     }
 }
 
+/// Ocupa el slot de `ejecucion_activa` si estaba libre; si ya había un
+/// token guardado, rechaza en vez de pisarlo.
+///
+/// Separada de `run_start` para poder probarla sin construir un
+/// `tauri::AppHandle`/`State` de verdad: solo necesita `&AppState`, que
+/// los tests ya saben construir con `AppState::new`.
+///
+/// Sobrescribir en vez de rechazar no cancelaría la ejecución anterior,
+/// solo la dejaría incancelable -- nada externo podría volver a alcanzar
+/// su token una vez perdido el slot. Es exactamente el tipo de cosa que
+/// esta ronda de Fase 5 viene endureciendo: no fiarse de que el frontend
+/// llame en el orden correcto (una UI con doble-click, o un bug, puede
+/// disparar dos `run_start` seguidos).
+fn reservar_ejecucion(state: &AppState, cancelar: &CancellationToken) -> Result<()> {
+    let mut guard = state
+        .ejecucion_activa
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        return Err(error::AppError::RunAlreadyActive);
+    }
+    *guard = Some(cancelar.clone());
+    Ok(())
+}
+
 #[tauri::command]
 async fn run_start(
     app: tauri::AppHandle,
@@ -144,10 +169,7 @@ async fn run_start(
 ) -> Result<()> {
     let fase = fase_desde_str(&phase)?;
     let cancelar = CancellationToken::new();
-    *state
-        .ejecucion_activa
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some(cancelar.clone());
+    reservar_ejecucion(&state, &cancelar)?;
 
     // El privilegio real lo calcula el comando, nunca el frontend: si
     // `privileged` llegase como argumento de `invoke`, cualquier llamador
@@ -196,11 +218,29 @@ async fn run_start(
             },
         )
         .await;
+
+        // Se limpia el slot tanto si `ejecutar_fase` terminó bien como si
+        // falló: mientras siga en `Some`, ningún `run_start` nuevo puede
+        // empezar (ver el rechazo de arriba con `RunAlreadyActive`), así
+        // que dejarlo puesto tras un error bloquearía toda ejecución
+        // futura, no solo esta.
+        *state_interna
+            .ejecucion_activa
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+
         if let Err(e) = resultado {
             let _ = app.emit(
                 "run:log",
                 serde_json::json!({ "origen": "stderr", "texto": e.to_string() }),
             );
+            // El camino de éxito ya emitió "run:fase-terminada" desde
+            // dentro de `ejecutar_fase` (vía `SucesoRun::FaseTerminada`,
+            // mapeado más arriba). Si no se emitiera aquí también en el
+            // camino de error, el store del frontend (Task 7) -- que solo
+            // sale de "corriendo" al recibir este evento -- se quedaría
+            // atascado ante cualquier fallo a mitad de fase.
+            let _ = app.emit("run:fase-terminada", ());
         }
     });
 
@@ -244,4 +284,54 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error al arrancar AUscan");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    // `reservar_ejecucion` es la parte de `run_start` que decide si una
+    // ejecución nueva puede empezar. Se prueba aparte, sin
+    // `tauri::AppHandle` ni `State` de verdad -- que exigirían un
+    // `tauri::App` completo o la feature `test` de tauri, ninguna de las
+    // cuales hace falta aquí -- porque la función solo toca `&AppState`.
+
+    #[test]
+    fn reservar_ejecucion_ocupa_el_slot_si_estaba_libre() {
+        let state = AppState::new(PathBuf::new());
+        let token = CancellationToken::new();
+
+        assert!(reservar_ejecucion(&state, &token).is_ok());
+        assert!(state
+            .ejecucion_activa
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|guardado| !guardado.is_cancelled()));
+    }
+
+    #[test]
+    fn reservar_ejecucion_rechaza_sin_pisar_el_token_ya_guardado() {
+        let state = AppState::new(PathBuf::new());
+        let primero = CancellationToken::new();
+        reservar_ejecucion(&state, &primero).expect("el slot estaba libre");
+
+        let segundo = CancellationToken::new();
+        let resultado = reservar_ejecucion(&state, &segundo);
+
+        assert!(matches!(resultado, Err(error::AppError::RunAlreadyActive)));
+        // Si `reservar_ejecucion` hubiera pisado el slot con `segundo`,
+        // cancelarlo aquí cancelaría también lo que hay guardado. El
+        // punto de esta prueba es que NO lo hace: el primero sigue siendo
+        // el dueño del slot, incancelable desde `segundo`.
+        segundo.cancel();
+        assert!(state
+            .ejecucion_activa
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|guardado| !guardado.is_cancelled()));
+    }
 }
