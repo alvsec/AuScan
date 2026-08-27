@@ -1780,7 +1780,9 @@ EOF
 
 **Interfaces:**
 - Consumes: `orchestrator::ejecutar_fase`/`SucesoRun` (Task 5).
-- Produces: comando Tauri `run_start(phase: String, tool_id: String, targets: Vec<String>, privileged: bool) -> Result<()>` (asíncrono, dispara y vuelve enseguida; el progreso llega por eventos), comando `run_cancel() -> Result<()>`. Eventos emitidos: `run:log` (`{ origen: "stdout"|"stderr", texto: String }`), `run:done` (`{ seq: i64, status: String }`), `run:fase-terminada` (sin payload).
+- Produces: comando Tauri `run_start(phase: String, tool_id: String, targets: Vec<String>) -> Result<()>` (asíncrono, dispara y vuelve enseguida; el progreso llega por eventos), comando `run_cancel() -> Result<()>`. Eventos emitidos: `run:log` (`{ origen: "stdout"|"stderr", texto: String }`), `run:done` (`{ seq: i64, status: String }`), `run:fase-terminada` (sin payload).
+
+**Por qué `run_start` no recibe `privileged` del frontend:** ese booleano acabaría entrando directo como `effective_privileged` en `verja()` (Task 1) a través de `orchestrator::ejecutar_fase`. Aceptarlo tal cual desde el comando sería reabrir, con el frontend en vez del adaptador, exactamente el hueco que la Task 1 cerró: cualquiera que pudiera invocar el comando —o un bug en la propia UI— podría declararse privilegiado sin que el proceso lo esté de verdad. El comando calcula el privilegio real él mismo, con `preflight::running_privileged()`, y ese es el único valor que le llega a `ejecutar_fase`.
 
 - [ ] **Step 1: Ampliar `AppState`**
 
@@ -1839,12 +1841,17 @@ async fn run_start(
     phase: String,
     tool_id: String,
     targets: Vec<String>,
-    privileged: bool,
 ) -> Result<()> {
     let fase = fase_desde_str(&phase)?;
     let cancelar = CancellationToken::new();
     *state.ejecucion_activa.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancelar.clone());
 
+    // El privilegio real lo calcula el comando, nunca el frontend: si
+    // `privileged` llegase como argumento de `invoke`, cualquier llamador
+    // -- o un bug de la propia UI -- podría declararse privilegiado sin
+    // que el proceso lo esté de verdad, reabriendo con el frontend el
+    // hueco que la Task 1 cerró para los adaptadores.
+    let privileged = preflight::running_privileged();
     let opciones = PhaseOptions::default();
 
     // `state: State<'_, AppState>` no sobrevive dentro de la tarea
@@ -1943,7 +1950,7 @@ EOF
 - Create: `src/store/useRunStore.test.ts`
 
 **Interfaces:**
-- Produces: `export type LineaLog = { origen: "stdout" | "stderr"; texto: string }`, `export type RunDone = { seq: number; status: string }`, tienda `useRunStore` con `estado: "inactivo" | "corriendo"`, `lineas: LineaLog[]`, `runsTerminados: RunDone[]`, `error: string | null`, `iniciar(phase, toolId, targets, privileged): Promise<void>`, `cancelar(): Promise<void>`. Task 8 consume esta tienda directamente.
+- Produces: `export type LineaLog = { origen: "stdout" | "stderr"; texto: string }`, `export type RunDone = { seq: number; status: string }`, tienda `useRunStore` con `estado: "inactivo" | "corriendo"`, `lineas: LineaLog[]`, `runsTerminados: RunDone[]`, `error: string | null`, `iniciar(phase, toolId, targets): Promise<void>`, `cancelar(): Promise<void>`. Sin parámetro de privilegio a propósito — ver la nota de la Task 6. Task 8 consume esta tienda directamente.
 
 - [ ] **Step 1: Tipos de dominio**
 
@@ -1968,9 +1975,14 @@ Mira primero `src/data/preflight.ts` para seguir exactamente su estilo de envolt
 ```typescript
 import { invoke } from "@tauri-apps/api/core";
 
+// Sin `privileged` aquí a propósito: el comando calcula el privilegio
+// real él mismo (`preflight::running_privileged()`). Aceptarlo como
+// argumento reabriría, con el frontend, el hueco que la verja cerró
+// para los adaptadores -- cualquiera que invocase el comando podría
+// declararse privilegiado sin que el proceso lo esté de verdad.
 export const api = {
-  start: (phase: string, toolId: string, targets: string[], privileged: boolean): Promise<void> =>
-    invoke("run_start", { phase, toolId, targets, privileged }),
+  start: (phase: string, toolId: string, targets: string[]): Promise<void> =>
+    invoke("run_start", { phase, toolId, targets }),
   cancel: (): Promise<void> => invoke("run_cancel"),
 };
 ```
@@ -1993,7 +2005,7 @@ type RunStore = {
   lineas: LineaLog[];
   runsTerminados: RunDone[];
   error: string | null;
-  iniciar: (phase: string, toolId: string, targets: string[], privileged: boolean) => Promise<void>;
+  iniciar: (phase: string, toolId: string, targets: string[]) => Promise<void>;
   cancelar: () => Promise<void>;
   _suscribir: () => Promise<UnlistenFn[]>;
 };
@@ -2011,11 +2023,11 @@ export const useRunStore = create<RunStore>((set, get) => ({
   runsTerminados: [],
   error: null,
 
-  iniciar: async (phase, toolId, targets, privileged) => {
+  iniciar: async (phase, toolId, targets) => {
     set({ estado: "corriendo", lineas: [], runsTerminados: [], error: null });
     await get()._suscribir();
     try {
-      await api.start(phase, toolId, targets, privileged);
+      await api.start(phase, toolId, targets);
     } catch (e) {
       set({ error: mensaje(e), estado: "inactivo" });
     }
@@ -2079,28 +2091,28 @@ describe("useRunStore", () => {
 
   it("pasa a corriendo y limpia el estado anterior al iniciar", async () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
     expect(useRunStore.getState().estado).toBe("corriendo");
     expect(useRunStore.getState().lineas).toEqual([]);
   });
 
   it("acumula líneas de log según llegan por el evento run:log", async () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
     listeners["run:log"]({ payload: { origen: "stdout", texto: "hola" } });
     expect(useRunStore.getState().lineas).toEqual([{ origen: "stdout", texto: "hola" }]);
   });
 
   it("vuelve a inactivo cuando llega run:fase-terminada", async () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
     listeners["run:fase-terminada"]({ payload: undefined });
     expect(useRunStore.getState().estado).toBe("inactivo");
   });
 
   it("guarda el error y vuelve a inactivo si start falla", async () => {
     vi.mocked(invoke).mockRejectedValue("fuera de alcance");
-    await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"], false);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"]);
     expect(useRunStore.getState().error).toBe("fuera de alcance");
     expect(useRunStore.getState().estado).toBe("inactivo");
   });
@@ -2210,7 +2222,7 @@ export function Run() {
 
   const lanzar = async () => {
     setConfirmando(false);
-    await iniciar(fase, "nmap", objetivos, false);
+    await iniciar(fase, "nmap", objetivos);
   };
 
   return (
@@ -2339,7 +2351,7 @@ describe("Run", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /lanzar/i }));
     fireEvent.click(screen.getByRole("button", { name: /^ejecutar$/i }));
-    expect(storeBase.iniciar).toHaveBeenCalledWith("discovery", "nmap", ["198.51.100.5"], false);
+    expect(storeBase.iniciar).toHaveBeenCalledWith("discovery", "nmap", ["198.51.100.5"]);
   });
 
   it("muestra las líneas de log acumuladas", () => {
