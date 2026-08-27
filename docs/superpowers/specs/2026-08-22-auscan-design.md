@@ -729,6 +729,29 @@ para componer `resumen.md`. La Fase 5 termina en: se lanzó, se vio en vivo, se
 puede cancelar, y al terminar se ve un recuento (N hosts, N servicios, N
 observaciones) — no una tabla explorable.
 
+### 9.9 De dónde salen los objetivos de cada fase
+
+`Scope` valida una dirección o un nombre concretos; no expande un CIDR
+completo en la lista de direcciones que contiene, así que no hay manera de
+"lanzar contra todo el alcance autorizado" automáticamente sin construir antes
+esa enumeración, y esta fase no la construye.
+
+El operador escribe los objetivos de la ejecución (una o varias direcciones u
+hostnames) en la propia pantalla. Ese texto se valida con
+`Scope::validate_target` — la misma función que ya resuelve hostnames y exige
+que **todas** sus direcciones caigan dentro del alcance — **en cada fase que
+se lanza, no solo en la primera**: el operador puede editar la lista entre una
+fase y la siguiente, y aunque no la toque, se re-evalúa igual. Así el alcance
+se comprueba antes de construir el argv en todos los casos, sin excepción,
+tal y como exige §6.
+
+`Phase::PortSweep` y `Phase::Services` no piden objetivos nuevos al operador
+—los derivan de `ctx.known.hosts`/`ctx.known.services`, que es precisamente
+para lo que existe `scoped_target_de` (Fase 4)— pero sí necesitan que
+`ctx.targets` seguir conteniendo la lista vigente, para que esa función pueda
+seguir verificando que cada host conocido sigue estando entre los objetivos
+autorizados de esta ejecución.
+
 ---
 
 ## 10. Exportación, purga y política de datos
