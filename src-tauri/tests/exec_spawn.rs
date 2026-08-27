@@ -1,6 +1,8 @@
 use std::path::Path;
+use std::time::Duration;
 
 use auscan_lib::exec::{ejecutar, Linea, LineaOrigen};
+use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
 fn shell() -> (&'static str, &'static str) {
@@ -16,9 +18,11 @@ fn shell() -> (&'static str, &'static str) {
 // de ahí el `allow`: no hay forma de que ambos aparezcan "usados" a la
 // vez ante el lint sin duplicar esta función entera por plataforma.
 #[allow(unused_variables)]
-async fn correr(
+async fn correr_con(
     script_unix: &str,
     script_windows: &str,
+    timeout: Duration,
+    cancelar: CancellationToken,
 ) -> (auscan_lib::exec::ResultadoEjecucion, Vec<Linea>) {
     let (bin, flag) = shell();
     #[cfg(unix)]
@@ -29,11 +33,26 @@ async fn correr(
     let resultado = ejecutar(
         Path::new(bin),
         &[flag.to_string(), script.to_string()],
+        timeout,
+        cancelar,
         |l| lineas.push(l),
     )
     .await
     .unwrap();
     (resultado, lineas)
+}
+
+async fn correr(
+    script_unix: &str,
+    script_windows: &str,
+) -> (auscan_lib::exec::ResultadoEjecucion, Vec<Linea>) {
+    correr_con(
+        script_unix,
+        script_windows,
+        Duration::from_secs(30),
+        CancellationToken::new(),
+    )
+    .await
 }
 
 #[cfg(unix)]
@@ -85,4 +104,52 @@ async fn ejecutar_separa_stderr_de_stdout() {
 async fn ejecutar_devuelve_el_codigo_de_salida_real() {
     let (resultado, _) = correr("exit 7", "exit 7").await;
     assert_eq!(resultado.exit_code, Some(7));
+}
+
+#[cfg(unix)]
+fn dormir_mucho() -> &'static str {
+    "sleep 30"
+}
+#[cfg(windows)]
+fn dormir_mucho() -> &'static str {
+    "timeout /T 30"
+}
+
+#[tokio::test]
+async fn ejecutar_se_cancela_cuando_se_solicita() {
+    let cancelar = CancellationToken::new();
+    let señal = cancelar.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        señal.cancel();
+    });
+    let script = dormir_mucho();
+    let (resultado, _) = correr_con(script, script, Duration::from_secs(60), cancelar).await;
+    assert!(resultado.cancelado);
+    assert_eq!(resultado.exit_code, None);
+}
+
+#[tokio::test]
+async fn ejecutar_se_cancela_al_agotar_el_timeout() {
+    let script = dormir_mucho();
+    let (resultado, _) = correr_con(
+        script,
+        script,
+        Duration::from_millis(200),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(resultado.cancelado);
+}
+
+#[tokio::test]
+async fn cancelar_ya_disparado_antes_de_lanzar_tambien_para_el_proceso() {
+    // Prueba justo la razón de usar CancellationToken en vez de Notify:
+    // un token ya cancelado ANTES de empezar debe seguir contando como
+    // cancelado, no perderse.
+    let cancelar = CancellationToken::new();
+    cancelar.cancel();
+    let script = dormir_mucho();
+    let (resultado, _) = correr_con(script, script, Duration::from_secs(60), cancelar).await;
+    assert!(resultado.cancelado);
 }

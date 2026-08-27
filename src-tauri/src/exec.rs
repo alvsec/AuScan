@@ -7,9 +7,11 @@
 
 use std::net::IpAddr;
 use std::path::Path;
+use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
 
 use crate::adapters::{Invocation, ToolDescriptor};
 use crate::error::{AppError, Result};
@@ -170,21 +172,34 @@ pub fn verja(
     Ok(())
 }
 
-/// Lanza `binary_path` con `argv`, acumula todo su stdout y stderr
-/// byte a byte, e invoca `on_linea` por cada línea completa de
-/// cualquiera de los dos flujos, en el orden en que llegan.
+/// Lanza `binary_path` con `argv` en su propio grupo de procesos
+/// (Unix), acumula stdout/stderr byte a byte e invoca `on_linea` por
+/// cada línea completa. Si `cancelar` se activa o `timeout` se agota,
+/// mata el grupo entero -- `SIGTERM` y, tras un plazo de gracia,
+/// `SIGKILL` -- y devuelve `cancelado: true`. En plataformas sin grupo
+/// de procesos POSIX, mata solo el hijo directo sin paso amable.
 pub async fn ejecutar(
     binary_path: &Path,
     argv: &[String],
+    timeout: Duration,
+    cancelar: CancellationToken,
     mut on_linea: impl FnMut(Linea),
 ) -> Result<ResultadoEjecucion> {
-    let mut hijo = Command::new(binary_path)
+    let mut comando = Command::new(binary_path);
+    comando
         .args(argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(AppError::Io)?;
+        .stdin(std::process::Stdio::null());
+    // `process_group` es un método inherente de `tokio::process::Command`
+    // en esta versión de tokio (no requiere `std::os::unix::process::
+    // CommandExt` en scope; importarlo aquí sobra y `clippy -D warnings`
+    // lo marca como `unused_imports`).
+    #[cfg(unix)]
+    comando.process_group(0);
+
+    let mut hijo = comando.spawn().map_err(AppError::Io)?;
+    let pid = hijo.id();
 
     let mut stdout = hijo.stdout.take().expect("stdout se pidió piped()");
     let mut stderr = hijo.stderr.take().expect("stderr se pidió piped()");
@@ -197,8 +212,12 @@ pub async fn ejecutar(
     let mut buf_stderr = [0u8; 4096];
     let mut stdout_cerrado = false;
     let mut stderr_cerrado = false;
+    let plazo = tokio::time::Instant::now() + timeout;
 
-    while !(stdout_cerrado && stderr_cerrado) {
+    loop {
+        if stdout_cerrado && stderr_cerrado {
+            break;
+        }
         tokio::select! {
             leido = stdout.read(&mut buf_stdout), if !stdout_cerrado => {
                 let n = leido.map_err(AppError::Io)?;
@@ -222,6 +241,14 @@ pub async fn ejecutar(
                     }
                 }
             }
+            () = cancelar.cancelled() => {
+                matar(&mut hijo, pid).await;
+                return Ok(ResultadoEjecucion { raw, stderr: stderr_completo, exit_code: None, cancelado: true });
+            }
+            () = tokio::time::sleep_until(plazo) => {
+                matar(&mut hijo, pid).await;
+                return Ok(ResultadoEjecucion { raw, stderr: stderr_completo, exit_code: None, cancelado: true });
+            }
         }
     }
 
@@ -232,6 +259,32 @@ pub async fn ejecutar(
         exit_code: estado.code(),
         cancelado: false,
     })
+}
+
+#[cfg(unix)]
+async fn matar(hijo: &mut tokio::process::Child, pid: Option<u32>) {
+    let Some(pid) = pid else { return };
+    // SAFETY: enviar una señal a un grupo de procesos que esta misma
+    // función creó al lanzar el hijo (`process_group(0)`) no tiene más
+    // precondición que un pid válido, y `pid` viene de `Child::id()`
+    // sobre un hijo que sigue vivo en este punto.
+    unsafe {
+        libc::killpg(pid as i32, libc::SIGTERM);
+    }
+    if tokio::time::timeout(Duration::from_secs(3), hijo.wait())
+        .await
+        .is_err()
+    {
+        unsafe {
+            libc::killpg(pid as i32, libc::SIGKILL);
+        }
+        let _ = hijo.wait().await;
+    }
+}
+
+#[cfg(not(unix))]
+async fn matar(hijo: &mut tokio::process::Child, _pid: Option<u32>) {
+    let _ = hijo.kill().await;
 }
 
 #[cfg(test)]
