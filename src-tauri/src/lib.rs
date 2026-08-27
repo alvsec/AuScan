@@ -11,10 +11,14 @@ pub mod runs;
 pub mod scope;
 pub mod state;
 
+use tauri::Emitter;
 use tauri::{Manager, State};
+use tokio_util::sync::CancellationToken;
 
+use adapters::{Phase, PhaseOptions};
 use engagement::EngagementRef;
 use error::Result;
+use orchestrator::SucesoRun;
 use scope::{ScopeEntry, ScopeKind};
 use state::{AppState, OpenEngagement};
 
@@ -119,6 +123,102 @@ fn preflight_install(tool_id: String) -> Result<String> {
     preflight::interpret_install_output(&tool_id, salida)
 }
 
+fn fase_desde_str(s: &str) -> Result<Phase> {
+    match s {
+        "discovery" => Ok(Phase::Discovery),
+        "portsweep" => Ok(Phase::PortSweep),
+        "services" => Ok(Phase::Services),
+        _ => Err(error::AppError::ToolNotFound(format!(
+            "fase desconocida: {s}"
+        ))),
+    }
+}
+
+#[tauri::command]
+async fn run_start(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    phase: String,
+    tool_id: String,
+    targets: Vec<String>,
+) -> Result<()> {
+    let fase = fase_desde_str(&phase)?;
+    let cancelar = CancellationToken::new();
+    *state
+        .ejecucion_activa
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(cancelar.clone());
+
+    // El privilegio real lo calcula el comando, nunca el frontend: si
+    // `privileged` llegase como argumento de `invoke`, cualquier llamador
+    // -- o un bug de la propia UI -- podría declararse privilegiado sin
+    // que el proceso lo esté de verdad, reabriendo con el frontend el
+    // hueco que la Task 1 cerró para los adaptadores.
+    let privileged = preflight::running_privileged();
+    let opciones = PhaseOptions::default();
+
+    // `state: State<'_, AppState>` no sobrevive dentro de la tarea
+    // `spawn`eada: su lifetime está atado a esta llamada de comando, que
+    // vuelve antes de que la tarea termine. `app: AppHandle` sí es
+    // `Clone + Send + 'static` -- se mueve entero dentro del bloque y
+    // `app.state::<AppState>()` se vuelve a pedir AHÍ DENTRO, nunca antes.
+    tauri::async_runtime::spawn(async move {
+        let registro = adapters::registry();
+        let state_interna = app.state::<AppState>();
+        let app_para_eventos = app.clone();
+        let resultado = orchestrator::ejecutar_fase(
+            state_interna.inner(),
+            &registro,
+            fase,
+            &tool_id,
+            &targets,
+            privileged,
+            &opciones,
+            cancelar,
+            move |suceso| {
+                let _ = match suceso {
+                    SucesoRun::Log { origen, texto } => app_para_eventos.emit(
+                        "run:log",
+                        serde_json::json!({
+                            "origen": match origen {
+                                exec::LineaOrigen::Stdout => "stdout",
+                                exec::LineaOrigen::Stderr => "stderr",
+                            },
+                            "texto": texto,
+                        }),
+                    ),
+                    SucesoRun::RunTerminado { seq, status } => app_para_eventos.emit(
+                        "run:done",
+                        serde_json::json!({ "seq": seq, "status": status }),
+                    ),
+                    SucesoRun::FaseTerminada => app_para_eventos.emit("run:fase-terminada", ()),
+                };
+            },
+        )
+        .await;
+        if let Err(e) = resultado {
+            let _ = app.emit(
+                "run:log",
+                serde_json::json!({ "origen": "stderr", "texto": e.to_string() }),
+            );
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn run_cancel(state: State<AppState>) -> Result<()> {
+    let guard = state
+        .ejecucion_activa
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(token) = guard.as_ref() {
+        token.cancel();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -139,6 +239,8 @@ pub fn run() {
             scope_check,
             preflight_run,
             preflight_install,
+            run_start,
+            run_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error al arrancar AUscan");

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use rusqlite::Connection;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{AppError, Result};
 
@@ -13,6 +14,7 @@ pub struct OpenEngagement {
 pub struct AppState {
     pub root: PathBuf,
     pub open: Mutex<Option<OpenEngagement>>,
+    pub ejecucion_activa: Mutex<Option<CancellationToken>>,
 }
 
 impl AppState {
@@ -20,6 +22,7 @@ impl AppState {
         Self {
             root,
             open: Mutex::new(None),
+            ejecucion_activa: Mutex::new(None),
         }
     }
 
