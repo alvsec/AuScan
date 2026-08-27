@@ -12,13 +12,16 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 // el store registra con `listen(nombre, cb)` para poder dispararlo a mano
 // desde el test, como si el backend hubiera emitido el evento.
 const listeners: Record<string, (evento: { payload: unknown }) => void> = {};
+const unlistenMocks: Record<string, ReturnType<typeof vi.fn>> = {};
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((nombre: string, cb: (evento: { payload: unknown }) => void) => {
     listeners[nombre] = cb;
-    return Promise.resolve(() => {
+    const unlisten = vi.fn(() => {
       delete listeners[nombre];
     });
+    unlistenMocks[nombre] = unlisten;
+    return Promise.resolve(unlisten);
   }),
 }));
 
@@ -26,7 +29,7 @@ import { useRunStore } from "./useRunStore";
 
 describe("useRunStore", () => {
   beforeEach(() => {
-    useRunStore.setState({ estado: "inactivo", lineas: [], runsTerminados: [], error: null });
+    useRunStore.setState({ estado: "inactivo", lineas: [], runsTerminados: [], error: null, _desuscribir: null });
     invoke.mockReset();
   });
 
@@ -56,5 +59,13 @@ describe("useRunStore", () => {
     await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"]);
     expect(useRunStore.getState().error).toBe("fuera de alcance");
     expect(useRunStore.getState().estado).toBe("inactivo");
+  });
+
+  it("cancela las suscripciones anteriores si iniciar() se llama de nuevo", async () => {
+    invoke.mockResolvedValue(undefined);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    const unlistenPrevio = unlistenMocks["run:log"];
+    await useRunStore.getState().iniciar("services", "nmap", ["198.51.100.5"]);
+    expect(unlistenPrevio).toHaveBeenCalledTimes(1);
   });
 });
