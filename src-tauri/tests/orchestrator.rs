@@ -272,6 +272,133 @@ async fn ejecutar_fase_cancelada_deja_el_tool_run_marcado_y_no_persiste_hallazgo
     );
 }
 
+/// Soltar el lock a través del `.await` es correcto y obligatorio, pero
+/// deja una ventana: `engagement_open` y `engagement_purge` son comandos
+/// de Tauri que el operador puede disparar en cualquier momento, también
+/// mientras un escaneo está corriendo. Si al recuperar el lock nadie
+/// comprueba QUÉ engagement hay abierto ahora, el `tool_run_id` acuñado
+/// contra la base de antes se usa para escribir en la base de después --
+/// y como `tool_run.id` es un autoincremento por base, ese id suele
+/// existir ya allí: los resultados de un cliente acabarían dentro del
+/// expediente de otro.
+///
+/// El cambio se dispara desde `on_suceso`: la primera línea de log llega
+/// mientras `exec::ejecutar` está corriendo, que es exactamente la
+/// ventana en la que el orquestador tiene el lock soltado. No hay carrera
+/// que provocar ni `sleep` que ajustar -- el propio pipeline marca el
+/// instante.
+#[tokio::test]
+async fn cambiar_de_engagement_a_media_ejecucion_aborta_en_vez_de_escribir_en_el_otro() {
+    let (dir, state, id_original) = estado_de_prueba();
+    let state = Arc::new(state);
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(AdaptadorDePrueba)];
+
+    // Un segundo engagement, con su propia base y su propio alcance.
+    let otro = auscan_lib::engagement::create(dir.path(), "AZAFRAN").unwrap();
+    let conn_otro = auscan_lib::engagement::open(dir.path(), &otro.id).unwrap();
+    auscan_lib::scope::add_entry(&conn_otro, ScopeKind::Allow, "198.51.100.0/24", None).unwrap();
+
+    // Clave para que el test pruebe el caso GRAVE y no uno afortunado:
+    // se le da al otro engagement una ejecución previa propia, así su
+    // `tool_run.id = 1` ya existe. `tool_run.id` es un autoincremento
+    // POR BASE, así que dos expedientes cualesquiera colisionan en los
+    // primeros ids -- y sin la comprobación de identidad el UPDATE y los
+    // upserts de este escaneo encajarían ahí sin violar ninguna clave
+    // ajena y sin dar el menor error. Sin esta fila previa, la base
+    // vacía delataría el fallo con un FOREIGN KEY constraint failed y el
+    // test pasaría por el motivo equivocado.
+    let seq_otro = auscan_lib::runs::siguiente_seq(&conn_otro).unwrap();
+    let id_run_otro = auscan_lib::runs::crear_tool_run(
+        &conn_otro,
+        seq_otro,
+        "prueba",
+        "1.0.0",
+        "/bin/sh",
+        "discovery",
+        "[]",
+        false,
+        "[]",
+        "2026-01-01T00:00:00Z",
+    )
+    .unwrap();
+
+    let s2 = state.clone();
+    let id_otro = otro.id.clone();
+    let mut conn_otro = Some(conn_otro);
+
+    let resultado = ejecutar_fase(
+        &state,
+        &registro,
+        Phase::Discovery,
+        "prueba",
+        &["198.51.100.5".to_string()],
+        false,
+        &PhaseOptions::default(),
+        CancellationToken::new(),
+        move |suceso| {
+            // Al primer log, cambiar el engagement abierto bajo los pies
+            // del orquestador. (Que este `lock()` no se autobloquee es de
+            // paso la prueba de que `on_suceso` no se invoca con el mutex
+            // cogido: `std::sync::Mutex` no es reentrante.)
+            if matches!(suceso, SucesoRun::Log { .. }) {
+                if let Some(conn) = conn_otro.take() {
+                    *s2.open.lock().unwrap() = Some(auscan_lib::state::OpenEngagement {
+                        id: id_otro.clone(),
+                        conn,
+                    });
+                }
+            }
+        },
+    )
+    .await;
+
+    // 1. Se aborta, y el error nombra el engagement que se esperaba.
+    assert!(
+        matches!(resultado, Err(AppError::EngagementChanged(ref id)) if *id == id_original),
+        "se esperaba EngagementChanged({id_original}), llegó {resultado:?}"
+    );
+
+    // 2. Y lo que de verdad importa: la base del OTRO engagement no
+    //    recibió absolutamente nada de un escaneo que no es suyo.
+    let guard = state.open.lock().unwrap();
+    let abierto = guard.as_ref().unwrap();
+    assert_eq!(abierto.id, otro.id, "el swap del test sí llegó a ocurrir");
+    for tabla in ["host", "service", "observation"] {
+        let n: i64 = abierto
+            .conn
+            .query_row(&format!("SELECT COUNT(*) FROM {tabla}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            n, 0,
+            "el engagement {} no debe recibir ni una fila en {tabla} de un escaneo ajeno",
+            otro.id
+        );
+    }
+
+    // Su propia ejecución previa sigue intacta: `cerrar_tool_run` no la
+    // pisó con el exit_code, el status ni el raw_path del escaneo ajeno.
+    let (n_runs, status, raw_path): (i64, String, Option<String>) = abierto
+        .conn
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM tool_run), status, raw_path FROM tool_run WHERE id = ?1",
+            [id_run_otro],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        n_runs, 1,
+        "no se crearon filas nuevas en el engagement ajeno"
+    );
+    assert_eq!(
+        status, "running",
+        "su ejecución previa no debe quedar cerrada por un escaneo ajeno"
+    );
+    assert_eq!(
+        raw_path, None,
+        "ni debe apuntar al crudo de otro expediente"
+    );
+}
+
 /// El invariante central de este módulo: ningún `MutexGuard` de
 /// `AppState.open` sigue vivo a través de un `.await`.
 ///

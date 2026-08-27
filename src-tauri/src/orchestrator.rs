@@ -52,21 +52,39 @@ pub async fn ejecutar_fase(
     cancelar: CancellationToken,
     mut on_suceso: impl FnMut(SucesoRun) + Send + 'static,
 ) -> Result<()> {
-    let (invocaciones, id_engagement) = {
-        // Bloque síncrono: el guard se suelta al final de este bloque,
-        // antes de cualquier `.await`.
+    // Etapa 1: cargar el alcance. Rápido y síncrono; el lock se suelta
+    // antes de resolver ningún nombre.
+    let (scope, id_engagement) = {
         let guard = state.open.lock().unwrap_or_else(|e| e.into_inner());
         let abierto = guard.as_ref().ok_or(AppError::NoEngagementOpen)?;
-        let conn = &abierto.conn;
+        (scope::load(&abierto.conn)?, abierto.id.clone())
+    };
 
-        let scope = scope::load(conn)?;
-        let resolver = SystemResolver;
-        let mut targets = Vec::new();
-        for t in objetivos_crudos {
-            targets.extend(scope.validate_target(t, &resolver)?);
+    // Etapa 2: resolver y validar los objetivos, SIN el lock cogido.
+    // `SystemResolver` hace una consulta DNS síncrona y bloqueante: con
+    // el mutex en la mano, un nombre con DNS lento o caído congelaría
+    // todos los demás comandos (scope_list, engagement_open, purge...)
+    // durante el timeout entero, además de bloquear un hilo del runtime.
+    // No es un `.await`, así que la comprobación de `Send` no lo ve --
+    // pero es el mismo peligro que la disciplina de locks existe para
+    // evitar.
+    let resolver = SystemResolver;
+    let mut targets = Vec::new();
+    for t in objetivos_crudos {
+        targets.extend(scope.validate_target(t, &resolver)?);
+    }
+
+    // Etapa 3: recuperar el lock para leer el estado conocido y
+    // planificar. Se revalida que siga siendo el mismo engagement: la
+    // resolución de nombres de la etapa 2 pudo durar lo suficiente como
+    // para que el operador abriera o purgara otro por el camino.
+    let invocaciones = {
+        let guard = state.open.lock().unwrap_or_else(|e| e.into_inner());
+        let abierto = guard.as_ref().ok_or(AppError::NoEngagementOpen)?;
+        if abierto.id != id_engagement {
+            return Err(AppError::EngagementChanged(id_engagement));
         }
-
-        let known = runs::load_known_state(conn)?;
+        let known = runs::load_known_state(&abierto.conn)?;
         let adaptador = registro
             .iter()
             .find(|a| a.descriptor().id == tool_id)
@@ -79,7 +97,7 @@ pub async fn ejecutar_fase(
             privileged: privilegio_disponible,
             options: opciones,
         };
-        (adaptador.plan(&ctx)?, abierto.id.clone())
+        adaptador.plan(&ctx)?
     };
 
     for invocacion in invocaciones {
@@ -119,8 +137,16 @@ async fn ejecutar_invocacion(
     // Se resuelve UNA sola vez: esta misma ruta se usa para lanzar y
     // para el `expected_path` de la verja. El hueco de symlinks de
     // Homebrew desaparece por construcción, no por canonicalizar.
-    let binario = which::which(descriptor.binaries[0])
-        .map_err(|_| AppError::ToolNotFound(tool_id.to_string()))?;
+    //
+    // Se prueban TODOS los nombres declarados, en orden, igual que
+    // `preflight::check_tool`: si el preflight aceptó la herramienta por
+    // su segundo binario, quedarse aquí con el primero la daría por
+    // ausente justo al ir a lanzarla.
+    let binario = descriptor
+        .binaries
+        .iter()
+        .find_map(|b| which::which(b).ok())
+        .ok_or_else(|| AppError::ToolNotFound(tool_id.to_string()))?;
 
     // Revalidación de versión justo antes de ejecutar: si cambió desde
     // el preflight (un `brew upgrade` de por medio), no se lanza.
@@ -154,6 +180,12 @@ async fn ejecutar_invocacion(
     let (tool_run_id, seq) = {
         let guard = state.open.lock().unwrap_or_else(|e| e.into_inner());
         let abierto = guard.as_ref().ok_or(AppError::NoEngagementOpen)?;
+        // El lock se soltó mientras se resolvía el binario y se
+        // revalidaba la versión: comprobar que sigue abierto NO basta,
+        // hay que comprobar que sigue abierto EL MISMO.
+        if abierto.id != id_engagement {
+            return Err(AppError::EngagementChanged(id_engagement.to_string()));
+        }
         let conn = &abierto.conn;
         let seq = runs::siguiente_seq(conn)?;
         let targets_json = serde_json::to_string(
@@ -211,9 +243,23 @@ async fn ejecutar_invocacion(
         "failed"
     };
 
+    // Si `parse()` falla, el aviso se guarda aquí y se emite DESPUÉS de
+    // soltar el lock: `std::sync::Mutex` no es reentrante, y un
+    // `on_suceso` que llegara a tocar `state.open` se autobloquearía.
+    let mut aviso_parseo: Option<String> = None;
+
     {
         let guard = state.open.lock().unwrap_or_else(|e| e.into_inner());
         let abierto = guard.as_ref().ok_or(AppError::NoEngagementOpen)?;
+        // Segunda revalidación, y la que más importa: entre el bloque
+        // anterior y este se esperó al proceso entero. `tool_run_id` se
+        // acuñó contra la base del engagement de arriba, y como es un
+        // autoincremento por base, ese mismo id puede existir ya en la
+        // base de OTRO engagement -- escribir aquí a ciegas atribuiría
+        // los resultados de un cliente al expediente de otro.
+        if abierto.id != id_engagement {
+            return Err(AppError::EngagementChanged(id_engagement.to_string()));
+        }
         let conn = &abierto.conn;
         runs::cerrar_tool_run(
             conn,
@@ -245,13 +291,17 @@ async fn ejecutar_invocacion(
                     )?;
                 }
                 Err(e) => {
-                    on_suceso(SucesoRun::Log {
-                        origen: LineaOrigen::Stderr,
-                        texto: format!("no se pudo interpretar la salida: {e}"),
-                    });
+                    aviso_parseo = Some(format!("no se pudo interpretar la salida: {e}"));
                 }
             }
         }
+    }
+
+    if let Some(texto) = aviso_parseo {
+        on_suceso(SucesoRun::Log {
+            origen: LineaOrigen::Stderr,
+            texto,
+        });
     }
 
     on_suceso(SucesoRun::RunTerminado {

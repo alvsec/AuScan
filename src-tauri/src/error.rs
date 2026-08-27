@@ -46,6 +46,9 @@ pub enum AppError {
     #[error("no hay ningún engagement abierto")]
     NoEngagementOpen,
 
+    #[error("el engagement cambió durante la ejecución (se esperaba {0})")]
+    EngagementChanged(String),
+
     #[error("el engagement {0} no existe")]
     EngagementNotFound(String),
 
