@@ -8,9 +8,62 @@
 use std::net::IpAddr;
 use std::path::Path;
 
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
+
 use crate::adapters::{Invocation, ToolDescriptor};
 use crate::error::{AppError, Result};
 use crate::scope::ScopedTarget;
+
+/// De qué flujo salió una línea capturada durante una ejecución.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineaOrigen {
+    Stdout,
+    Stderr,
+}
+
+/// Una línea completa de stdout o stderr, para streaming en vivo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Linea {
+    pub origen: LineaOrigen,
+    pub texto: String,
+}
+
+/// Lo que queda de una ejecución al terminar.
+#[derive(Debug, Clone)]
+pub struct ResultadoEjecucion {
+    pub raw: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub exit_code: Option<i32>,
+    pub cancelado: bool,
+}
+
+/// Acumula bytes crudos y separa líneas completas por `\n`, tolerando
+/// también un `\r\n` final (Windows) al trocear — pero sin que esa
+/// tolerancia toque nunca los bytes que se acumulan para `raw`/`stderr`.
+struct AcumuladorLineas {
+    buffer: Vec<u8>,
+}
+
+impl AcumuladorLineas {
+    fn nuevo() -> Self {
+        Self { buffer: Vec::new() }
+    }
+
+    fn alimentar(&mut self, bytes: &[u8]) -> Vec<String> {
+        self.buffer.extend_from_slice(bytes);
+        let mut lineas = Vec::new();
+        while let Some(pos) = self.buffer.iter().position(|&b| b == b'\n') {
+            let linea: Vec<u8> = self.buffer.drain(..=pos).collect();
+            let mut fin = linea.len() - 1;
+            if fin > 0 && linea[fin - 1] == b'\r' {
+                fin -= 1;
+            }
+            lineas.push(String::from_utf8_lossy(&linea[..fin]).into_owned());
+        }
+        lineas
+    }
+}
 
 /// Comprobación 1 de la verja: ningún objetivo sin validar.
 ///
@@ -115,4 +168,109 @@ pub fn verja(
     validate_flags(&invocation.argv, descriptor, effective_privileged)?;
     validate_binary(binary_path, expected_path)?;
     Ok(())
+}
+
+/// Lanza `binary_path` con `argv`, acumula todo su stdout y stderr
+/// byte a byte, e invoca `on_linea` por cada línea completa de
+/// cualquiera de los dos flujos, en el orden en que llegan.
+pub async fn ejecutar(
+    binary_path: &Path,
+    argv: &[String],
+    mut on_linea: impl FnMut(Linea),
+) -> Result<ResultadoEjecucion> {
+    let mut hijo = Command::new(binary_path)
+        .args(argv)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(AppError::Io)?;
+
+    let mut stdout = hijo.stdout.take().expect("stdout se pidió piped()");
+    let mut stderr = hijo.stderr.take().expect("stderr se pidió piped()");
+
+    let mut raw = Vec::new();
+    let mut stderr_completo = Vec::new();
+    let mut lineas_stdout = AcumuladorLineas::nuevo();
+    let mut lineas_stderr = AcumuladorLineas::nuevo();
+    let mut buf_stdout = [0u8; 4096];
+    let mut buf_stderr = [0u8; 4096];
+    let mut stdout_cerrado = false;
+    let mut stderr_cerrado = false;
+
+    while !(stdout_cerrado && stderr_cerrado) {
+        tokio::select! {
+            leido = stdout.read(&mut buf_stdout), if !stdout_cerrado => {
+                let n = leido.map_err(AppError::Io)?;
+                if n == 0 {
+                    stdout_cerrado = true;
+                } else {
+                    raw.extend_from_slice(&buf_stdout[..n]);
+                    for linea in lineas_stdout.alimentar(&buf_stdout[..n]) {
+                        on_linea(Linea { origen: LineaOrigen::Stdout, texto: linea });
+                    }
+                }
+            }
+            leido = stderr.read(&mut buf_stderr), if !stderr_cerrado => {
+                let n = leido.map_err(AppError::Io)?;
+                if n == 0 {
+                    stderr_cerrado = true;
+                } else {
+                    stderr_completo.extend_from_slice(&buf_stderr[..n]);
+                    for linea in lineas_stderr.alimentar(&buf_stderr[..n]) {
+                        on_linea(Linea { origen: LineaOrigen::Stderr, texto: linea });
+                    }
+                }
+            }
+        }
+    }
+
+    let estado = hijo.wait().await.map_err(AppError::Io)?;
+    Ok(ResultadoEjecucion {
+        raw,
+        stderr: stderr_completo,
+        exit_code: estado.code(),
+        cancelado: false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `AcumuladorLineas` es privado — no se puede ejercitar desde
+    // `tests/exec_spawn.rs`. Y un proceso real casi nunca fuerza que un
+    // `read()` corte una línea a la mitad (la salida de los scripts de
+    // prueba es minúscula y llega en un solo trozo), así que ese
+    // camino queda sin probar si no se llama a `alimentar` a mano. Estas
+    // pruebas comprueban justo eso: que el `buffer` interno persiste
+    // entre llamadas y reconstruye la línea igual si llega entera de una
+    // vez o repartida entre varias llamadas.
+    #[test]
+    fn una_linea_partida_entre_dos_llamadas_se_reconstruye() {
+        let mut acumulador = AcumuladorLineas::nuevo();
+        // Ningún '\n' todavía: no debe salir ninguna línea, pero los
+        // bytes no se pueden perder.
+        assert_eq!(acumulador.alimentar(b"linea-par"), Vec::<String>::new());
+        assert_eq!(acumulador.alimentar(b"cial\n"), vec!["linea-parcial"]);
+    }
+
+    #[test]
+    fn una_sola_llamada_puede_completar_varias_lineas_y_dejar_un_resto_parcial() {
+        let mut acumulador = AcumuladorLineas::nuevo();
+        let lineas = acumulador.alimentar(b"uno\ndos\ntres-parcial");
+        assert_eq!(lineas, vec!["uno", "dos"]);
+        // "tres-parcial" se quedó en el buffer, sin '\n' todavía.
+        assert_eq!(acumulador.alimentar(b"\n"), vec!["tres-parcial"]);
+    }
+
+    #[test]
+    fn un_crlf_partido_justo_entre_el_cr_y_el_lf_se_recorta_igual() {
+        let mut acumulador = AcumuladorLineas::nuevo();
+        // El '\r' llega en un trozo y el '\n' en el siguiente: si el
+        // acumulador tokenizase antes de tener ambos bytes, el '\r'
+        // quedaría pegado a la línea.
+        assert_eq!(acumulador.alimentar(b"hola\r"), Vec::<String>::new());
+        assert_eq!(acumulador.alimentar(b"\n"), vec!["hola"]);
+    }
 }
