@@ -32,8 +32,47 @@ fn engagement_list(state: State<AppState>) -> Result<Vec<EngagementRef>> {
     engagement::list(&state.root)
 }
 
+/// Coge el cerrojo de `ejecucion_activa` y falla si hay una ejecución en
+/// marcha. Devuelve el guard: quien llama lo mantiene vivo durante todo
+/// su trabajo, y ese es el punto -- si solo se mirase y se soltara,
+/// quedaría el hueco de un `run_start` colándose entre la comprobación y
+/// el borrado del directorio, que es precisamente la carrera que esto
+/// cierra.
+///
+/// El orden de cerrojos es siempre `ejecucion_activa` → `open`, nunca al
+/// revés: `run_start` coge `ejecucion_activa` sola, `run_cancel` y la
+/// limpieza del slot también, y el orquestador coge `open` sola. Con un
+/// único orden posible no hay abrazo mortal que montar.
+fn sin_ejecucion_en_marcha(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, Option<CancellationToken>>> {
+    let guard = state
+        .ejecucion_activa
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        return Err(error::AppError::EngagementBlockedByRun);
+    }
+    Ok(guard)
+}
+
 #[tauri::command]
 fn engagement_open(state: State<AppState>, id: String) -> Result<EngagementRef> {
+    abrir_engagement(&state, id)
+}
+
+/// El cuerpo de `engagement_open`, separado del comando por la misma
+/// razón que `reservar_ejecucion`: se prueba con un `&AppState` a secas,
+/// sin montar un `tauri::App` entero para fabricar un `State`.
+fn abrir_engagement(state: &AppState, id: String) -> Result<EngagementRef> {
+    // Lo primero de todo, antes incluso de canonicalizar el id: abrir
+    // otro engagement con un escaneo corriendo dejaría al orquestador
+    // escribiendo contra una base que ya no es la suya. La revalidación
+    // de identidad de `orchestrator.rs` lo detecta y aborta, pero
+    // detectarlo tarde significa un escaneo perdido a media fase; aquí
+    // ni siquiera empieza el lío.
+    let _ejecucion = sin_ejecucion_en_marcha(state)?;
+
     let id = engagement::canonical_id(&id)?;
     // El lock se sostiene durante todo el trabajo de disco: si se soltara,
     // una purga concurrente podría borrar el directorio entre la
@@ -53,6 +92,24 @@ fn engagement_open(state: State<AppState>, id: String) -> Result<EngagementRef> 
 
 #[tauri::command]
 fn engagement_purge(state: State<AppState>, id: String) -> Result<EngagementRef> {
+    purgar_engagement(&state, id)
+}
+
+/// El cuerpo de `engagement_purge`, separado del comando para poder
+/// probarlo con un `&AppState` (ver `abrir_engagement`).
+fn purgar_engagement(state: &AppState, id: String) -> Result<EngagementRef> {
+    // Antes que nada. Una purga a media ejecución borraba el árbol del
+    // engagement y devolvía "hecho", pero el orquestador seguía vivo y
+    // sin enterarse: su escritura del fichero crudo -- que ocurre mucho
+    // después de la revalidación de identidad, y que esa revalidación no
+    // ve porque el engagement no CAMBIÓ, se borró -- recreaba el
+    // directorio recién purgado y depositaba dentro la captura completa
+    // del cliente, minutos más tarde. Rechazar mientras el slot esté
+    // ocupado lo hace imposible por construcción: `ejecucion_activa` se
+    // pone en `Some` al principio de `run_start` y no se suelta hasta que
+    // la fase entera termina, escritura del crudo incluida.
+    let _ejecucion = sin_ejecucion_en_marcha(state)?;
+
     let id = engagement::canonical_id(&id)?;
     // El lock se sostiene durante todo el trabajo de disco, por la misma
     // razón que en engagement_open. Solo se cierra la conexión si es la
@@ -333,5 +390,74 @@ mod tests {
             .unwrap()
             .as_ref()
             .is_some_and(|guardado| !guardado.is_cancelled()));
+    }
+
+    /// Un engagement con su directorio y su base, ya creado en un
+    /// tempdir, con el `AppState` que lo tiene por raíz.
+    fn engagement_de_prueba() -> (tempfile::TempDir, AppState, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().to_path_buf());
+        let referencia = engagement::create(dir.path(), "CLAVEL").unwrap();
+        (dir, state, referencia.id)
+    }
+
+    #[test]
+    fn abrir_y_purgar_funcionan_con_el_slot_de_ejecucion_libre() {
+        let (dir, state, id) = engagement_de_prueba();
+
+        let abierto = abrir_engagement(&state, id.clone()).expect("sin ejecución activa se abre");
+        assert_eq!(abierto.id, id);
+        assert!(state.open.lock().unwrap().is_some());
+
+        let lapida = purgar_engagement(&state, id.clone()).expect("sin ejecución activa se purga");
+        assert_eq!(lapida.state, "purged");
+        assert!(!paths::engagement_dir(dir.path(), &id).unwrap().exists());
+    }
+
+    /// Purgar a media ejecución borraba el árbol del engagement y
+    /// devolvía "hecho" mientras el orquestador seguía corriendo: su
+    /// escritura del fichero crudo, muy posterior, recreaba el
+    /// directorio recién purgado y metía dentro la captura completa del
+    /// cliente. Abrir otro a media ejecución es la misma familia de
+    /// problema por la otra puerta.
+    #[test]
+    fn abrir_y_purgar_se_niegan_mientras_haya_una_ejecucion_en_marcha() {
+        let (dir, state, id) = engagement_de_prueba();
+        reservar_ejecucion(&state, &CancellationToken::new()).unwrap();
+
+        assert!(matches!(
+            abrir_engagement(&state, id.clone()),
+            Err(error::AppError::EngagementBlockedByRun)
+        ));
+        assert!(
+            state.open.lock().unwrap().is_none(),
+            "un open rechazado no deja nada abierto"
+        );
+
+        assert!(matches!(
+            purgar_engagement(&state, id.clone()),
+            Err(error::AppError::EngagementBlockedByRun)
+        ));
+        // Lo que de verdad importa del rechazo: el expediente sigue en
+        // disco, entero. Un `Err` que hubiera borrado igualmente el árbol
+        // sería el peor de los dos mundos.
+        assert!(
+            paths::engagement_dir(dir.path(), &id).unwrap().is_dir(),
+            "una purga rechazada no puede haber tocado el directorio"
+        );
+        assert!(engagement::list(dir.path())
+            .unwrap()
+            .iter()
+            .any(|e| e.id == id && e.purged_at.is_none()));
+
+        // Y al liberarse el slot (lo que hace `run_start` al terminar la
+        // fase), las dos vuelven a funcionar: esto es un rechazo
+        // temporal, no un bloqueo permanente.
+        *state
+            .ejecucion_activa
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        assert!(abrir_engagement(&state, id.clone()).is_ok());
+        assert!(purgar_engagement(&state, id).is_ok());
     }
 }

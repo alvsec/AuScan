@@ -58,6 +58,9 @@ pub enum AppError {
     #[error("ya hay una ejecución en marcha")]
     RunAlreadyActive,
 
+    #[error("hay una ejecución en marcha: cancélala antes de abrir o purgar un engagement")]
+    EngagementBlockedByRun,
+
     #[error("no se encontró la herramienta {0} en el registro")]
     ToolNotFound(String),
 
