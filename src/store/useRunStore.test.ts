@@ -61,6 +61,19 @@ describe("useRunStore", () => {
     expect(useRunStore.getState().estado).toBe("inactivo");
   });
 
+  // El test de arriba cubre el rechazo SÍNCRONO de `invoke`, que es el
+  // único camino que `iniciar()` maneja en su try/catch. Pero un objetivo
+  // fuera de alcance no llega así: `run_start` devuelve Ok y el fallo se
+  // descubre después, ya dentro de la tarea del backend, que lo emite por
+  // `run:error`. Ese camino es el que de verdad usa el rechazo más
+  // importante que hace esta aplicación.
+  it("guarda el error cuando llega por el evento run:error", async () => {
+    invoke.mockResolvedValue(undefined);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"]);
+    listeners["run:error"]!({ payload: { mensaje: "objetivo fuera de alcance: 203.0.113.9" } });
+    expect(useRunStore.getState().error).toBe("objetivo fuera de alcance: 203.0.113.9");
+  });
+
   it("cancela las suscripciones anteriores si iniciar() se llama de nuevo", async () => {
     invoke.mockResolvedValue(undefined);
     await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);

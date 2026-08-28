@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { create } from "zustand";
 
 import { api } from "../data/runs";
-import type { LineaLog, RunDone } from "../domain/model/run";
+import type { LineaLog, RunDone, RunError } from "../domain/model/run";
 
 type EstadoRun = "inactivo" | "corriendo";
 
@@ -63,6 +63,13 @@ export const useRunStore = create<RunStore>((set, get) => ({
     const unlistenFase = await listen("run:fase-terminada", () => {
       set({ estado: "inactivo" });
     });
-    return [unlistenLog, unlistenDone, unlistenFase];
+    // Los fallos que ocurren DESPUÉS de que `run_start` haya devuelto
+    // (el objetivo fuera de alcance, sobre todo) no llegan como rechazo
+    // de `invoke`: llegan por aquí. Sin este listener solo se veían como
+    // una línea de stderr perdida en el log.
+    const unlistenError = await listen<RunError>("run:error", (evento) => {
+      set({ error: evento.payload.mensaje });
+    });
+    return [unlistenLog, unlistenDone, unlistenFase, unlistenError];
   },
 }));

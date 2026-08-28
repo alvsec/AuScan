@@ -287,10 +287,16 @@ async fn run_start(
             .unwrap_or_else(|e| e.into_inner()) = None;
 
         if let Err(e) = resultado {
-            let _ = app.emit(
-                "run:log",
-                serde_json::json!({ "origen": "stderr", "texto": e.to_string() }),
-            );
+            // Evento propio, no una línea más del log. Todo lo que puede
+            // fallar aquí -- un objetivo FUERA DE ALCANCE el primero de
+            // todos, pero también la herramienta ausente, la versión
+            // insuficiente o la verja -- llegaba antes como un `[stderr]`
+            // sin etiquetar dentro del `<pre>` que scrollea, indistinguible
+            // del ruido que escupe la propia herramienta. El rechazo más
+            // importante que hace esta aplicación no puede depender de que
+            // el operador lea el log a tiempo: `run:error` es lo que
+            // enciende el `role="alert"` de la pantalla.
+            let _ = app.emit("run:error", serde_json::json!({ "mensaje": e.to_string() }));
             // El camino de éxito ya emitió "run:fase-terminada" desde
             // dentro de `ejecutar_fase` (vía `SucesoRun::FaseTerminada`,
             // mapeado más arriba). Si no se emitiera aquí también en el
