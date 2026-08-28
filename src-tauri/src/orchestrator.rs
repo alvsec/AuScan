@@ -218,7 +218,12 @@ async fn ejecutar_invocacion(
             &binario.display().to_string(),
             fase_str(invocacion.phase),
             &argv_json,
-            invocacion.needs_privilege,
+            // El privilegio que se archiva es el REAL del proceso -- el
+            // mismo que `verja()` acaba de hacer cumplir --, nunca
+            // `invocacion.needs_privilege`, que es lo que el adaptador
+            // dice necesitar. El registro de auditoría tiene que contar
+            // lo que de verdad pasó, no lo que se pidió.
+            privilegio_disponible,
             &targets_json,
             &db::now_iso(),
         )?;
