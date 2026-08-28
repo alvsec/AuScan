@@ -1,36 +1,30 @@
-import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import "../i18n";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 import { useRunStore } from "../store/useRunStore";
 import { Run } from "./Run";
 
-// A diferencia de Preflight.test.tsx/Scope.test.tsx (que usan el store
-// real y solo mockean `invoke`), aquí se mockea el módulo entero de
-// useRunStore. useRunStore.test.ts ya cubre a fondo la suscripción a
-// eventos y el ciclo de vida async del store; este test solo necesita
-// tratar su interfaz pública como frontera para probar Run.tsx (diálogo
-// de confirmación, estados deshabilitados, render del log).
-vi.mock("../store/useRunStore");
-
-const storeBase = {
-  estado: "inactivo" as const,
-  lineas: [],
-  runsTerminados: [],
-  error: null,
-  iniciar: vi.fn(),
-  cancelar: vi.fn(),
-};
-
 describe("Run", () => {
   beforeEach(() => {
-    // Limpia el historial de llamadas de storeBase.iniciar/cancelar entre
-    // tests: al ser el mismo objeto (y las mismas funciones vi.fn())
-    // reutilizado con spread en cada mockReturnValue, sin esto las
-    // aserciones "not.toHaveBeenCalled()" dependerían del orden de
-    // ejecución de los tests.
-    vi.clearAllMocks();
-    vi.mocked(useRunStore).mockReturnValue({ ...storeBase });
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+    useRunStore.setState({
+      estado: "inactivo",
+      lineas: [],
+      runsTerminados: [],
+      error: null,
+      _desuscribir: null,
+    });
   });
 
   it("no lanza sin escribir objetivos", () => {
@@ -38,29 +32,32 @@ describe("Run", () => {
     expect(screen.getByRole("button", { name: /lanzar/i })).toBeDisabled();
   });
 
-  it("pide confirmación mostrando el argv antes de lanzar", () => {
+  it("pide confirmación mostrando el argv antes de lanzar", async () => {
     render(<Run />);
-    fireEvent.change(screen.getByLabelText(/objetivos/i), {
-      target: { value: "198.51.100.5" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+
     expect(screen.getByRole("dialog")).toHaveTextContent("198.51.100.5");
-    expect(storeBase.iniciar).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("llama a iniciar solo tras confirmar", () => {
+  it("llama a run_start solo tras confirmar", async () => {
     render(<Run />);
-    fireEvent.change(screen.getByLabelText(/objetivos/i), {
-      target: { value: "198.51.100.5" },
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^ejecutar$/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("run_start", {
+        phase: "discovery",
+        toolId: "nmap",
+        targets: ["198.51.100.5"],
+      });
     });
-    fireEvent.click(screen.getByRole("button", { name: /lanzar/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^ejecutar$/i }));
-    expect(storeBase.iniciar).toHaveBeenCalledWith("discovery", "nmap", ["198.51.100.5"]);
   });
 
   it("muestra las líneas de log acumuladas", () => {
-    vi.mocked(useRunStore).mockReturnValue({
-      ...storeBase,
+    useRunStore.setState({
       estado: "corriendo",
       lineas: [{ origen: "stdout", texto: "hola" }],
     });
@@ -68,10 +65,19 @@ describe("Run", () => {
     expect(screen.getByTestId("log")).toHaveTextContent("hola");
   });
 
-  it("el botón de cancelar ejecución llama a cancelar", () => {
-    vi.mocked(useRunStore).mockReturnValue({ ...storeBase, estado: "corriendo" });
+  it("el botón de lanzar está deshabilitado mientras corre", () => {
+    useRunStore.setState({ estado: "corriendo" });
     render(<Run />);
-    fireEvent.click(screen.getByRole("button", { name: /cancelar ejecución/i }));
-    expect(storeBase.cancelar).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /lanzar/i })).toBeDisabled();
+  });
+
+  it("el botón de cancelar ejecución llama a run_cancel", async () => {
+    useRunStore.setState({ estado: "corriendo" });
+    render(<Run />);
+    await userEvent.click(screen.getByRole("button", { name: /cancelar ejecución/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("run_cancel");
+    });
   });
 });
