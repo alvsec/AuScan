@@ -59,17 +59,18 @@ raro. **Si no:** B deja de ser opcional.
 
 ## Resultado del spike
 
-Ejecutado en red propia (192.168.1.0/24), 2026-08-27. macOS 26.5.2 (25F84),
-nmap 7.991. ChmodBPF instalado y verificado (usuario en el grupo `access_bpf`,
-`/dev/bpf*` con permisos de grupo).
+Ejecutado en red propia (198.51.100.0/24 en esta ADR — direcciones de
+documentación RFC 5737, la red real era un /24 doméstico normal), 2026-08-27.
+macOS 26.5.2 (25F84), nmap 7.991. ChmodBPF instalado y verificado (usuario en
+el grupo `access_bpf`, `/dev/bpf*` con permisos de grupo).
 
 **Sin privilegios:**
 
 ```
-$ nmap -sn -PR --send-eth 192.168.1.0/24
-Nmap scan report for 192.168.1.1
+$ nmap -sn -PR --send-eth 198.51.100.0/24
+Nmap scan report for 198.51.100.1
 Host is up (0.012s latency).
-Nmap scan report for 192.168.1.136
+Nmap scan report for 198.51.100.136
 Host is up (0.0023s latency).
 Nmap done: 256 IP addresses (2 hosts up) scanned in 22.56 seconds
 ```
@@ -77,23 +78,31 @@ Nmap done: 256 IP addresses (2 hosts up) scanned in 22.56 seconds
 **Con privilegios (`sudo`), mismo comando:**
 
 ```
-$ sudo nmap -sn -PR --send-eth 192.168.1.0/24
-Nmap scan report for 192.168.1.1
+$ sudo nmap -sn -PR --send-eth 198.51.100.0/24
+Nmap scan report for 198.51.100.1
 Host is up (0.059s latency).
-MAC Address: 20:3A:EB:A4:89:CA (zte)
-Nmap scan report for 192.168.1.133
+MAC Address: 02:1A:2B:00:01:01 (Synthetic Devices)
+Nmap scan report for 198.51.100.133
 Host is up (0.13s latency).
 MAC Address: 82:F7:6B:74:DE:92 (Unknown)
-Nmap scan report for 192.168.1.140
+Nmap scan report for 198.51.100.140
 Host is up (0.13s latency).
-MAC Address: AC:F4:2C:83:AD:D9 (Earda Technologies)
-Nmap scan report for 192.168.1.170
+MAC Address: 02:1A:2B:00:01:02 (Synthetic Devices)
+Nmap scan report for 198.51.100.170
 Host is up (0.17s latency).
-MAC Address: A0:D0:DC:66:84:CC (Amazon Technologies)
-Nmap scan report for 192.168.1.136
+MAC Address: 02:1A:2B:00:01:03 (Synthetic Devices)
+Nmap scan report for 198.51.100.136
 Host is up.
 Nmap done: 256 IP addresses (5 hosts up) scanned in 4.93 seconds
 ```
+
+Direcciones IP y MAC de fabricante real sustituidas por sus equivalentes de
+documentación (RFC 5737) y sintéticas — la `82:F7:6B:74:DE:92` no se toca
+porque ya es una MAC administrada localmente (bit U/L real, no una asignación
+de fabricante), que es precisamente por lo que nmap la reporta como
+"Unknown": no identifica nada real que redactar. La conclusión del spike
+depende del recuento de hosts, de si aparece MAC/fabricante y de la
+velocidad — ninguno de los tres cambia por esta sustitución.
 
 **No coinciden, en tres sentidos:**
 
