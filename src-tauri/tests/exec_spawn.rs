@@ -154,11 +154,48 @@ async fn ejecutar_se_cancela_si_el_token_ya_estaba_cancelado_antes_de_empezar() 
     // misma fase (p. ej. Services, una por host) -- con Notify, la
     // invocación 2 consumiría el permiso guardado y la 3 arrancaría
     // fresca, sin verlo. Esa propiedad no es comprobable en aislamiento
-    // aquí: hará falta una prueba real el día que exista un llamador que
-    // invoque ejecutar() más de una vez por fase.
+    // aquí: se prueba de verdad en
+    // `tests/orchestrator.rs::cancelar_a_media_fase_no_lanza_las_invocaciones_que_quedaban`,
+    // ahora que el bucle del orquestador es ese llamador que invoca
+    // ejecutar() más de una vez por fase.
     let cancelar = CancellationToken::new();
     cancelar.cancel();
     let script = dormir_mucho();
     let (resultado, _) = correr_con(script, script, Duration::from_secs(60), cancelar).await;
     assert!(resultado.cancelado);
+}
+
+/// "Cancelado" no puede significar "lanzado y matado en el acto": el
+/// token se mira ANTES del `spawn`. Con la comprobación solo dentro del
+/// `select!` -- que ya corre con el proceso vivo -- una fase cancelada
+/// seguía arrancando un escáner de verdad por cada invocación restante.
+///
+/// La prueba es un binario que NO EXISTE: si `ejecutar` llegara al
+/// `spawn`, devolvería `Err(Io)` sin remedio. Que devuelva un resultado
+/// cancelado y bien formado es la única forma de que ni lo haya
+/// intentado. (Un marcador en disco no serviría: con el token ya
+/// cancelado, el proceso lanzado moriría antes de escribirlo casi
+/// siempre, y el test pasaría por suerte en vez de por diseño.)
+#[tokio::test]
+async fn ejecutar_con_el_token_ya_cancelado_ni_siquiera_lanza_el_proceso() {
+    let cancelar = CancellationToken::new();
+    cancelar.cancel();
+    let inexistente = Path::new("/no/existe/ningun-binario-auscan");
+    assert!(!inexistente.exists());
+
+    let mut lineas = Vec::new();
+    let resultado = ejecutar(inexistente, &[], Duration::from_secs(60), cancelar, |l| {
+        lineas.push(l)
+    })
+    .await
+    .expect("no se puede fallar al lanzar algo que no se lanza");
+
+    // Y la forma del resultado es la misma que produce la cancelación
+    // desde dentro del `select!`, para que quien llama no tenga que
+    // distinguir dos clases de cancelación.
+    assert!(resultado.cancelado);
+    assert_eq!(resultado.exit_code, None);
+    assert!(resultado.raw.is_empty());
+    assert!(resultado.stderr.is_empty());
+    assert!(lineas.is_empty());
 }

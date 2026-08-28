@@ -185,6 +185,23 @@ pub async fn ejecutar(
     cancelar: CancellationToken,
     mut on_linea: impl FnMut(Linea),
 ) -> Result<ResultadoEjecucion> {
+    // Antes del `spawn`, no después. El `select!` de más abajo solo mira
+    // el token una vez el proceso ya está corriendo: con una fase de
+    // varias invocaciones (Services planifica una por host), cancelar a
+    // mitad lanzaba igualmente el escáner de cada host restante para
+    // matarlo en el mismo suspiro. La forma del resultado es la misma
+    // que produce la rama `cancelar.cancelled()` del `select!` -- sin
+    // salida capturada, sin código de salida, `cancelado: true` --
+    // porque para quien llama es el mismo hecho: se canceló.
+    if cancelar.is_cancelled() {
+        return Ok(ResultadoEjecucion {
+            raw: Vec::new(),
+            stderr: Vec::new(),
+            exit_code: None,
+            cancelado: true,
+        });
+    }
+
     let mut comando = Command::new(binary_path);
     comando
         .args(argv)

@@ -101,6 +101,18 @@ pub async fn ejecutar_fase(
     };
 
     for invocacion in invocaciones {
+        // Cancelar una fase tiene que PARARLA, no solo hacer que cada
+        // invocación restante nazca muerta. Sin este corte, una fase
+        // Services con una invocación por host seguía resolviendo el
+        // binario, revalidando la versión, insertando una fila en
+        // `tool_run`, lanzando el escáner real y matándolo acto seguido
+        // -- una vez por cada host que quedara. `exec::ejecutar` también
+        // comprueba el token antes de su `spawn`, pero eso solo evita el
+        // proceso: el resto del trabajo (y la fila de auditoría de una
+        // ejecución que nunca ocurrió) hay que evitarlo aquí.
+        if cancelar.is_cancelled() {
+            break;
+        }
         ejecutar_invocacion(
             state,
             registro,

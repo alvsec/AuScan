@@ -108,6 +108,106 @@ impl ToolAdapter for AdaptadorDePrueba {
     }
 }
 
+/// Script que toca su marcador, escupe una línea y luego se queda
+/// colgado, para que la invocación siga viva mientras el test la
+/// cancela. El marcador es lo que distingue "no se persistió la fila" de
+/// "no se llegó a lanzar el proceso": sin él, un bucle que siguiera
+/// lanzando y matando escáneres pasaría igual con solo mirar la base.
+///
+/// El marcador se escribe ANTES de la línea de stdout a propósito: el
+/// test cancela justo al recibir esa línea, así que si el orden fuera el
+/// contrario la señal podría matar al proceso antes de que llegara a
+/// dejar su marca, y el test fallaría por una carrera en vez de por el
+/// fallo que persigue.
+#[cfg(unix)]
+fn script_marcador(marcador: &std::path::Path) -> String {
+    format!(
+        "echo lanzado > '{}'; echo hola; sleep 30",
+        marcador.display()
+    )
+}
+#[cfg(windows)]
+fn script_marcador(marcador: &std::path::Path) -> String {
+    format!(
+        "echo lanzado> \"{}\"&& echo hola&& timeout /T 30",
+        marcador.display()
+    )
+}
+
+/// Adaptador que planifica UNA invocación por objetivo, que es la forma
+/// que tiene la fase Services de verdad (nmap: un escaneo por host con
+/// sus puertos abiertos). No se usa el adaptador de nmap real porque
+/// exigiría el binario instalado en la máquina que ejecuta los tests; lo
+/// que estos tests necesitan del plan es solo su cardinalidad.
+///
+/// Cada invocación deja un marcador en `dir_marcadores` al arrancar, así
+/// que los tests pueden distinguir "no quedó fila" de "no se lanzó el
+/// proceso". El directorio viaja en el propio adaptador (que el test
+/// construye) en vez de en un estático compartido: los tests corren en
+/// paralelo dentro del mismo binario y cada uno tiene su tempdir.
+struct AdaptadorPorObjetivo {
+    dir_marcadores: std::path::PathBuf,
+}
+
+impl AdaptadorPorObjetivo {
+    fn marcador(&self, ip: &std::net::IpAddr) -> std::path::PathBuf {
+        self.dir_marcadores.join(format!("lanzado-{ip}"))
+    }
+}
+
+impl ToolAdapter for AdaptadorPorObjetivo {
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            id: "por-objetivo",
+            phases: &[Phase::Services],
+            ..AdaptadorDePrueba.descriptor()
+        }
+    }
+
+    fn version_argv(&self) -> Vec<String> {
+        AdaptadorDePrueba.version_argv()
+    }
+
+    fn parse_version(&self, stdout: &str) -> Result<Version> {
+        AdaptadorDePrueba.parse_version(stdout)
+    }
+
+    fn plan(&self, ctx: &PlanContext) -> Result<Vec<Invocation>> {
+        Ok(ctx
+            .targets
+            .iter()
+            .map(|t| Invocation {
+                phase: ctx.phase,
+                argv: vec![
+                    BANDERA.to_string(),
+                    script_marcador(&self.marcador(&t.ip())),
+                ],
+                targets: vec![*t],
+                needs_privilege: false,
+                raw_from: RawSource::Stdout,
+                progress_from: ProgressSource::None,
+                stdin: None,
+                timeout: Duration::from_secs(60),
+            })
+            .collect())
+    }
+
+    /// Delegado a propósito: `AdaptadorDePrueba::parse` inventa un host y
+    /// una observación pase lo que pase, que es justo lo que hace que un
+    /// `COUNT(*) = 0` en `host`/`observation` pruebe algo (que no se
+    /// parseó) en vez de ser cierto por vacío.
+    fn parse(&self, raw: &[u8], ctx: &ParseContext) -> Result<Normalized> {
+        AdaptadorDePrueba.parse(raw, ctx)
+    }
+}
+
+/// Directorio de marcadores dentro del tempdir del test, ya creado.
+fn dir_marcadores(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let d = dir.path().join("marcadores");
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
 fn estado_de_prueba() -> (tempfile::TempDir, AppState, String) {
     let dir = tempfile::tempdir().unwrap();
     let state = AppState::new(dir.path().to_path_buf());
@@ -202,23 +302,37 @@ async fn ejecutar_fase_rechaza_un_objetivo_fuera_de_alcance() {
     );
 }
 
+/// La cancelación se dispara con la invocación EN VUELO (desde el primer
+/// log, como en el test de cambio de engagement), no con el token ya
+/// cancelado de antemano: desde que el bucle de `ejecutar_fase` corta al
+/// ver el token cancelado, una fase cancelada antes de empezar no llega
+/// a ejecutar nada y por tanto no tiene ninguna fila que marcar -- ese
+/// caso lo cubre `una_fase_cancelada_antes_de_empezar_no_deja_rastro`.
+/// Lo que este test protege es el otro lado: lo que SÍ llegó a correr no
+/// se borra por haberse cancelado.
 #[tokio::test]
 async fn ejecutar_fase_cancelada_deja_el_tool_run_marcado_y_no_persiste_hallazgos() {
     let (dir, state, id) = estado_de_prueba();
-    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(AdaptadorDePrueba)];
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(AdaptadorPorObjetivo {
+        dir_marcadores: dir_marcadores(&dir),
+    })];
     let cancelar = CancellationToken::new();
-    cancelar.cancel(); // ya cancelado antes de empezar
+    let señal = cancelar.clone();
 
     ejecutar_fase(
         &state,
         &registro,
-        Phase::Discovery,
-        "prueba",
-        &["198.51.100.5".to_string()],
+        Phase::Services,
+        "por-objetivo",
+        &["198.51.100.7".to_string()],
         false,
         &PhaseOptions::default(),
         cancelar,
-        |_| {},
+        move |suceso| {
+            if matches!(suceso, SucesoRun::Log { .. }) {
+                señal.cancel();
+            }
+        },
     )
     .await
     .unwrap();
@@ -247,7 +361,7 @@ async fn ejecutar_fase_cancelada_deja_el_tool_run_marcado_y_no_persiste_hallazgo
     // producirse son evidencia y se guardan igual...
     assert_eq!(status, "cancelled");
     let raw_path = raw_path.expect("una ejecución cancelada igualmente registra su raw_path");
-    assert_eq!(raw_path, "raw/0001-prueba-discovery.xml");
+    assert_eq!(raw_path, "raw/0001-por-objetivo-services.xml");
     assert!(
         raw_sha256.is_some_and(|h| h.len() == 64),
         "el sha256 de la salida cruda se calcula aunque la ejecución se cancele"
@@ -269,6 +383,154 @@ async fn ejecutar_fase_cancelada_deja_el_tool_run_marcado_y_no_persiste_hallazgo
     assert_eq!(
         n_obs, 0,
         "una ejecución cancelada no parsea ni persiste observaciones"
+    );
+}
+
+/// La otra mitad: si el token ya venía cancelado, no hay nada que
+/// registrar. Una fila en `tool_run` afirma que una herramienta se lanzó
+/// contra un objetivo del cliente; escribirla por una invocación que
+/// jamás llegó a existir es exactamente el tipo de afirmación falsa que
+/// este expediente no puede permitirse.
+///
+/// La fase igualmente tiene que señalar su fin: el store del frontend
+/// solo sale de "corriendo" con `FaseTerminada`, así que cortar el bucle
+/// sin emitirlo dejaría la UI colgada tras cada cancelación.
+#[tokio::test]
+async fn una_fase_cancelada_antes_de_empezar_no_deja_rastro() {
+    let (dir, state, _id) = estado_de_prueba();
+    let adaptador = AdaptadorPorObjetivo {
+        dir_marcadores: dir_marcadores(&dir),
+    };
+    let marcador = adaptador.marcador(&"198.51.100.8".parse().unwrap());
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(adaptador)];
+    let cancelar = CancellationToken::new();
+    cancelar.cancel(); // ya cancelado antes de empezar
+
+    let sucesos = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let s2 = sucesos.clone();
+    ejecutar_fase(
+        &state,
+        &registro,
+        Phase::Services,
+        "por-objetivo",
+        &["198.51.100.8".to_string()],
+        false,
+        &PhaseOptions::default(),
+        cancelar,
+        move |suceso| s2.lock().unwrap().push(suceso),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !marcador.exists(),
+        "no se lanza ningún proceso con el token ya cancelado"
+    );
+    let guard = state.open.lock().unwrap();
+    let conn = &guard.as_ref().unwrap().conn;
+    let n_runs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tool_run", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        n_runs, 0,
+        "una invocación que nunca se ejecutó no deja fila en tool_run"
+    );
+
+    let sucesos = sucesos.lock().unwrap();
+    assert!(
+        sucesos
+            .iter()
+            .any(|s| matches!(s, SucesoRun::FaseTerminada)),
+        "la fase tiene que señalar su fin aunque se corte por cancelación"
+    );
+}
+
+/// La prueba que `tests/exec_spawn.rs` dejó pendiente ("hará falta una
+/// prueba real el día que exista un llamador que invoque `ejecutar()`
+/// más de una vez por fase"): ese llamador es el bucle de invocaciones
+/// del orquestador.
+///
+/// Cancelar una fase tiene que PARARLA. Antes, el bucle seguía llamando
+/// a `ejecutar_invocacion` para cada invocación restante: cada una
+/// resolvía el binario, revalidaba la versión, pasaba la verja,
+/// insertaba su fila en `tool_run`, lanzaba el escáner de verdad y lo
+/// mataba acto seguido. En una fase Services contra una red entera eso
+/// es un `spawn` -- y una fila de auditoría de una ejecución que nunca
+/// llegó a escanear nada -- por cada host que quedara.
+///
+/// La cancelación se dispara desde `on_suceso`, al recibir la primera
+/// línea de log: eso sitúa el corte con la primera invocación EN VUELO,
+/// que es el caso real (el operador da a "cancelar" con el escaneo
+/// corriendo), no el trivial de un token ya cancelado antes de empezar.
+#[tokio::test]
+async fn cancelar_a_media_fase_no_lanza_las_invocaciones_que_quedaban() {
+    let (dir, state, _id) = estado_de_prueba();
+    let adaptador = AdaptadorPorObjetivo {
+        dir_marcadores: dir_marcadores(&dir),
+    };
+    let ip_primera: std::net::IpAddr = "198.51.100.5".parse().unwrap();
+    let ip_segunda: std::net::IpAddr = "198.51.100.6".parse().unwrap();
+    let (marcador_primera, marcador_segunda) = (
+        adaptador.marcador(&ip_primera),
+        adaptador.marcador(&ip_segunda),
+    );
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(adaptador)];
+
+    let cancelar = CancellationToken::new();
+    let señal = cancelar.clone();
+
+    ejecutar_fase(
+        &state,
+        &registro,
+        Phase::Services,
+        "por-objetivo",
+        &["198.51.100.5".to_string(), "198.51.100.6".to_string()],
+        false,
+        &PhaseOptions::default(),
+        cancelar,
+        move |suceso| {
+            if matches!(suceso, SucesoRun::Log { .. }) {
+                señal.cancel();
+            }
+        },
+    )
+    .await
+    .unwrap();
+
+    // 1. La primera invocación sí llegó a lanzarse: sin esto, el test
+    //    pasaría igual si el plan hubiera salido vacío o el adaptador no
+    //    hubiera arrancado nada, sin haber ejercitado nada.
+    assert!(
+        marcador_primera.is_file(),
+        "la primera invocación tenía que haberse lanzado antes de cancelar"
+    );
+
+    // 2. Y la segunda no llegó a existir como proceso.
+    assert!(
+        !marcador_segunda.exists(),
+        "cancelar la fase no debe lanzar el escáner de los objetivos que quedaban"
+    );
+
+    // 3. Ni como fila de auditoría: una invocación que nunca se ejecutó
+    //    no puede dejar rastro de haberlo hecho.
+    let guard = state.open.lock().unwrap();
+    let conn = &guard.as_ref().unwrap().conn;
+    let (n_runs, status, targets_json): (i64, String, String) = conn
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM tool_run), status, targets_json
+             FROM tool_run LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        n_runs, 1,
+        "solo la invocación en vuelo al cancelar deja fila en tool_run"
+    );
+    assert_eq!(status, "cancelled");
+    assert!(
+        targets_json.contains("198.51.100.5"),
+        "la única fila tiene que ser la de la invocación en vuelo, llegó {targets_json}"
     );
 }
 
