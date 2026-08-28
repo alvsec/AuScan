@@ -7,7 +7,7 @@ use auscan_lib::adapters::{
     ToolDescriptor,
 };
 use auscan_lib::error::{AppError, Result};
-use auscan_lib::orchestrator::{ejecutar_fase, SucesoRun};
+use auscan_lib::orchestrator::{ejecutar_fase, planificar, SucesoRun};
 use auscan_lib::scope::ScopeKind;
 use auscan_lib::state::AppState;
 use semver::Version;
@@ -658,6 +658,117 @@ async fn cambiar_de_engagement_a_media_ejecucion_aborta_en_vez_de_escribir_en_el
     assert_eq!(
         raw_path, None,
         "ni debe apuntar al crudo de otro expediente"
+    );
+}
+
+/// `planificar` es lo que hay detrás del comando `run_preview`: el
+/// diálogo de confirmación enseña el argv REAL, no uno reconstruido en
+/// la webview. Que devuelva el argv correcto es la mitad del trato.
+#[test]
+fn planificar_devuelve_el_argv_real_de_la_fase() {
+    let (_dir, state, id) = estado_de_prueba();
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(AdaptadorDePrueba)];
+
+    let (invocaciones, id_devuelto) = planificar(
+        &state,
+        &registro,
+        Phase::Discovery,
+        "prueba",
+        &["198.51.100.5".to_string()],
+        false,
+        &PhaseOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(id_devuelto, id);
+    assert_eq!(invocaciones.len(), 1);
+    assert_eq!(
+        invocaciones[0].argv,
+        vec![BANDERA.to_string(), "echo hola".to_string()]
+    );
+    // La forma exacta que `run_preview` le entrega al frontend: una
+    // línea por invocación, herramienta más argv.
+    assert_eq!(
+        invocaciones
+            .iter()
+            .map(|inv| format!("prueba {}", inv.argv.join(" ")))
+            .collect::<Vec<_>>(),
+        vec![format!("prueba {BANDERA} echo hola")]
+    );
+}
+
+/// La otra mitad, y la que de verdad importa: una "vista previa" que
+/// ejecutara a escondidas sería un fallo grave -- el operador vería el
+/// diálogo de confirmación DESPUÉS de que el escáner ya hubiera tocado
+/// la red del cliente. Se comprueba contra un adaptador que deja
+/// marcador al arrancar (para distinguir "no quedó fila" de "no se lanzó
+/// el proceso") y contra la base entera.
+#[test]
+fn planificar_no_ejecuta_nada_ni_deja_rastro() {
+    let (dir, state, id) = estado_de_prueba();
+    let adaptador = AdaptadorPorObjetivo {
+        dir_marcadores: dir_marcadores(&dir),
+    };
+    let marcador = adaptador.marcador(&"198.51.100.5".parse().unwrap());
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(adaptador)];
+
+    let (invocaciones, _) = planificar(
+        &state,
+        &registro,
+        Phase::Services,
+        "por-objetivo",
+        &["198.51.100.5".to_string()],
+        false,
+        &PhaseOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(invocaciones.len(), 1, "sí planificó algo que ejecutar");
+
+    assert!(
+        !marcador.exists(),
+        "una vista previa no puede haber lanzado ningún proceso"
+    );
+    // `raw/` ya existe antes de nada: lo crea `engagement::create`. Lo
+    // que prueba algo es que siga VACÍO -- ni un fichero crudo dentro.
+    assert_eq!(
+        std::fs::read_dir(auscan_lib::paths::raw_dir(dir.path(), &id).unwrap())
+            .unwrap()
+            .count(),
+        0,
+        "una vista previa no escribe ningún fichero crudo"
+    );
+    let guard = state.open.lock().unwrap();
+    let conn = &guard.as_ref().unwrap().conn;
+    for tabla in ["tool_run", "host", "service", "observation"] {
+        let n: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {tabla}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "una vista previa no puede dejar filas en {tabla}");
+    }
+}
+
+/// El rechazo de alcance ocurre en `planificar`, así que llega en la
+/// vista previa: el operador se entera de que su objetivo está fuera
+/// ANTES de ver un diálogo de confirmación con pinta de legítimo.
+#[test]
+fn planificar_rechaza_un_objetivo_fuera_de_alcance() {
+    let (_dir, state, _id) = estado_de_prueba();
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(AdaptadorDePrueba)];
+
+    let resultado = planificar(
+        &state,
+        &registro,
+        Phase::Discovery,
+        "prueba",
+        &["203.0.113.9".to_string()],
+        false,
+        &PhaseOptions::default(),
+    );
+
+    assert!(
+        matches!(resultado, Err(AppError::OutOfScope(ref ip)) if ip == "203.0.113.9"),
+        "se esperaba OutOfScope, llegó {:?}",
+        resultado.map(|(inv, _)| inv.len())
     );
 }
 

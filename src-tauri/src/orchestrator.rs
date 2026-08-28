@@ -38,10 +38,17 @@ fn fase_str(f: Phase) -> &'static str {
     }
 }
 
-/// Ejecuta una fase completa: arma el `PlanContext`, pide las
-/// invocaciones al adaptador, y lanza cada una en orden.
+/// Calcula qué invocaciones lanzaría una fase, sin ejecutar nada. Lo usan
+/// tanto `ejecutar_fase` (que sigue adelante y las ejecuta) como el
+/// comando de vista previa (que solo quiere enseñárselas al operador).
+///
+/// Es una `fn` a secas, no `async`: en todo este tramo no hay un solo
+/// `.await`, así que no hay ninguna razón para arrastrar un futuro. Eso
+/// también es lo que hace que sea seguro tener el lock de `state.open`
+/// cogido dentro de los bloques de abajo -- ningún `MutexGuard` puede
+/// cruzar un await que no existe.
 #[allow(clippy::too_many_arguments)]
-pub async fn ejecutar_fase(
+pub fn planificar(
     state: &AppState,
     registro: &[Box<dyn ToolAdapter>],
     fase: Phase,
@@ -49,9 +56,7 @@ pub async fn ejecutar_fase(
     objetivos_crudos: &[String],
     privilegio_disponible: bool,
     opciones: &PhaseOptions,
-    cancelar: CancellationToken,
-    mut on_suceso: impl FnMut(SucesoRun) + Send + 'static,
-) -> Result<()> {
+) -> Result<(Vec<Invocation>, String)> {
     // Etapa 1: cargar el alcance. Rápido y síncrono; el lock se suelta
     // antes de resolver ningún nombre.
     let (scope, id_engagement) = {
@@ -99,6 +104,33 @@ pub async fn ejecutar_fase(
         };
         adaptador.plan(&ctx)?
     };
+
+    Ok((invocaciones, id_engagement))
+}
+
+/// Ejecuta una fase completa: arma el `PlanContext`, pide las
+/// invocaciones al adaptador, y lanza cada una en orden.
+#[allow(clippy::too_many_arguments)]
+pub async fn ejecutar_fase(
+    state: &AppState,
+    registro: &[Box<dyn ToolAdapter>],
+    fase: Phase,
+    tool_id: &str,
+    objetivos_crudos: &[String],
+    privilegio_disponible: bool,
+    opciones: &PhaseOptions,
+    cancelar: CancellationToken,
+    mut on_suceso: impl FnMut(SucesoRun) + Send + 'static,
+) -> Result<()> {
+    let (invocaciones, id_engagement) = planificar(
+        state,
+        registro,
+        fase,
+        tool_id,
+        objetivos_crudos,
+        privilegio_disponible,
+        opciones,
+    )?;
 
     for invocacion in invocaciones {
         // Cancelar una fase tiene que PARARLA, no solo hacer que cada

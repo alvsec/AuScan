@@ -369,6 +369,43 @@ async fn run_start(
     Ok(())
 }
 
+/// Enseña el argv REAL que se lanzaría, sin lanzar nada.
+///
+/// La spec exige que el operador autorice lo que de verdad va a correr,
+/// no una aproximación construida en la webview: el frontend no sabe --
+/// ni debe saber -- que una fase discovery sin privilegio son `-sn -PR
+/// -n -oX -` ni cuántas invocaciones planifica una fase Services. Esa
+/// respuesta solo existe después de validar el alcance y de que el
+/// adaptador planifique, así que se calcula aquí con exactamente el
+/// mismo `planificar` que usa `ejecutar_fase`: si los dos no
+/// coincidieran, el diálogo de confirmación sería una mentira.
+///
+/// Que el alcance se valide también aquí es una ventaja, no un coste
+/// duplicado: un objetivo fuera de alcance se rechaza ANTES de que el
+/// operador llegue a ver un diálogo de confirmación plausible.
+///
+/// Sin parámetro `privileged`, por lo mismo que `run_start`: el
+/// privilegio lo calcula el backend, nunca el frontend.
+#[tauri::command]
+fn run_preview(
+    state: State<AppState>,
+    phase: String,
+    tool_id: String,
+    targets: Vec<String>,
+) -> Result<Vec<String>> {
+    let fase = fase_desde_str(&phase)?;
+    let privileged = preflight::running_privileged();
+    let opciones = PhaseOptions::default();
+    let registro = adapters::registry();
+    let (invocaciones, _id_engagement) = orchestrator::planificar(
+        &state, &registro, fase, &tool_id, &targets, privileged, &opciones,
+    )?;
+    Ok(invocaciones
+        .iter()
+        .map(|inv| format!("{tool_id} {}", inv.argv.join(" ")))
+        .collect())
+}
+
 #[tauri::command]
 fn run_cancel(state: State<AppState>) -> Result<()> {
     let guard = state
@@ -401,6 +438,7 @@ pub fn run() {
             scope_check,
             preflight_run,
             preflight_install,
+            run_preview,
             run_start,
             run_cancel,
         ])
