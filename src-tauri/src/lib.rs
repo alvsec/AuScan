@@ -287,17 +287,32 @@ async fn run_start(
     // `Clone + Send + 'static` -- se mueve entero dentro del bloque y
     // `app.state::<AppState>()` se vuelve a pedir AHÍ DENTRO, nunca antes.
     tauri::async_runtime::spawn(async move {
-        let registro = adapters::registry();
         let state_interna = app.state::<AppState>();
-        let app_para_eventos = app.clone();
 
         // El bloque delimita la vida del guard: se libera el slot en
-        // cuanto la fase termina -- bien, mal o en pánico -- y antes de
-        // emitir los eventos de cierre, para que el frontend no pueda
-        // recibir "run:fase-terminada" y disparar un `run_start` nuevo
-        // contra un slot todavía ocupado.
+        // cuanto la fase termina -- bien, mal o en pánico -- sea cual sea
+        // el resultado. Esto NO garantiza que el slot esté libre antes de
+        // que el frontend reciba "run:fase-terminada": en el camino de
+        // éxito ese evento ya sale desde dentro de `ejecutar_fase` (vía
+        // `SucesoRun::FaseTerminada`, más abajo) con el guard todavía
+        // vivo, y en el camino de error el guard se suelta antes de que
+        // este bloque emita el evento. Ninguna de las dos cosas importa
+        // en la práctica: entre soltar el guard y emitir el evento (o
+        // entre emitir el evento y soltar el guard) no hay ningún
+        // `.await` de por medio -- es código síncrono en línea recta, así
+        // que a la UI nunca le da tiempo a recibir el evento, decidir y
+        // volver a invocar `run_start` en esa ventana. Si algún día se
+        // introduce un `.await` en cualquiera de los dos tramos, esto deja
+        // de ser cierto y hay que revisarlo.
+        //
+        // El guard se construye lo primero dentro del bloque, antes de
+        // resolver el registro de adaptadores o clonar el handle de la
+        // app, para que un pánico en cualquiera de esos dos pasos no deje
+        // el slot ocupado para siempre.
         let resultado = {
             let _guardia = GuardaEjecucion::nueva(&state_interna.ejecucion_activa);
+            let registro = adapters::registry();
+            let app_para_eventos = app.clone();
             orchestrator::ejecutar_fase(
                 state_interna.inner(),
                 &registro,
