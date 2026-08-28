@@ -216,6 +216,51 @@ fn reservar_ejecucion(state: &AppState, cancelar: &CancellationToken) -> Result<
     Ok(())
 }
 
+/// Devuelve el slot de `ejecucion_activa` a `None` al destruirse, pase lo
+/// que pase.
+///
+/// Antes esto era una asignación a mano justo después del `await` de
+/// `ejecutar_fase`. Bastaba con que la tarea no llegase hasta ella para
+/// que el slot quedase en `Some` PARA SIEMPRE, y ese camino existe de
+/// verdad: `ejecutar_fase` llama a `adaptador.parse()` sobre la salida
+/// cruda de un escáner de terceros, entrada no confiable que puede hacer
+/// entrar en pánico al parser. La tarea `spawn`eada se desenrolla, la
+/// línea de limpieza nunca corre, y a partir de ahí `engagement_purge`
+/// -- el botón de emergencia de una herramienta cuyo oficio es la
+/// higiene de datos de cliente -- se niega sin remedio pidiendo cancelar
+/// una ejecución que ya no existe. `run_cancel` no arregla nada ahí: le
+/// hace `.cancel()` a un token que ya no escucha nadie y tampoco vacía
+/// el slot. Al operador solo le quedaba reiniciar la aplicación, sin
+/// ninguna pista de que fuera eso lo que hacía falta.
+///
+/// Con el guard, el `Drop` corre igual en los tres finales: futuro
+/// completado, salida temprana por `?`/`Err`, o desenrollado por pánico.
+///
+/// Ojo con no confundirlo con el `MutexGuard` del propio `Mutex`: eso
+/// sigue sin poder cruzar un `.await` (misma razón por la que el
+/// proyecto lo evita con el de `AppState.open`). Este guard solo guarda
+/// una *referencia* al `Mutex` y coge un cerrojo nuevo y cortísimo
+/// dentro de `drop`.
+struct GuardaEjecucion<'a> {
+    activa: &'a std::sync::Mutex<Option<CancellationToken>>,
+}
+
+impl<'a> GuardaEjecucion<'a> {
+    fn nueva(activa: &'a std::sync::Mutex<Option<CancellationToken>>) -> Self {
+        Self { activa }
+    }
+}
+
+impl Drop for GuardaEjecucion<'_> {
+    fn drop(&mut self) {
+        // `unwrap_or_else(into_inner)` por lo mismo que en el resto del
+        // fichero: si el mutex quedó envenenado, seguir envenenados
+        // dejaría el slot ocupado, que es justo lo que este guard
+        // existe para impedir.
+        *self.activa.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
 #[tauri::command]
 async fn run_start(
     app: tauri::AppHandle,
@@ -245,46 +290,45 @@ async fn run_start(
         let registro = adapters::registry();
         let state_interna = app.state::<AppState>();
         let app_para_eventos = app.clone();
-        let resultado = orchestrator::ejecutar_fase(
-            state_interna.inner(),
-            &registro,
-            fase,
-            &tool_id,
-            &targets,
-            privileged,
-            &opciones,
-            cancelar,
-            move |suceso| {
-                let _ = match suceso {
-                    SucesoRun::Log { origen, texto } => app_para_eventos.emit(
-                        "run:log",
-                        serde_json::json!({
-                            "origen": match origen {
-                                exec::LineaOrigen::Stdout => "stdout",
-                                exec::LineaOrigen::Stderr => "stderr",
-                            },
-                            "texto": texto,
-                        }),
-                    ),
-                    SucesoRun::RunTerminado { seq, status } => app_para_eventos.emit(
-                        "run:done",
-                        serde_json::json!({ "seq": seq, "status": status }),
-                    ),
-                    SucesoRun::FaseTerminada => app_para_eventos.emit("run:fase-terminada", ()),
-                };
-            },
-        )
-        .await;
 
-        // Se limpia el slot tanto si `ejecutar_fase` terminó bien como si
-        // falló: mientras siga en `Some`, ningún `run_start` nuevo puede
-        // empezar (ver el rechazo de arriba con `RunAlreadyActive`), así
-        // que dejarlo puesto tras un error bloquearía toda ejecución
-        // futura, no solo esta.
-        *state_interna
-            .ejecucion_activa
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
+        // El bloque delimita la vida del guard: se libera el slot en
+        // cuanto la fase termina -- bien, mal o en pánico -- y antes de
+        // emitir los eventos de cierre, para que el frontend no pueda
+        // recibir "run:fase-terminada" y disparar un `run_start` nuevo
+        // contra un slot todavía ocupado.
+        let resultado = {
+            let _guardia = GuardaEjecucion::nueva(&state_interna.ejecucion_activa);
+            orchestrator::ejecutar_fase(
+                state_interna.inner(),
+                &registro,
+                fase,
+                &tool_id,
+                &targets,
+                privileged,
+                &opciones,
+                cancelar,
+                move |suceso| {
+                    let _ = match suceso {
+                        SucesoRun::Log { origen, texto } => app_para_eventos.emit(
+                            "run:log",
+                            serde_json::json!({
+                                "origen": match origen {
+                                    exec::LineaOrigen::Stdout => "stdout",
+                                    exec::LineaOrigen::Stderr => "stderr",
+                                },
+                                "texto": texto,
+                            }),
+                        ),
+                        SucesoRun::RunTerminado { seq, status } => app_para_eventos.emit(
+                            "run:done",
+                            serde_json::json!({ "seq": seq, "status": status }),
+                        ),
+                        SucesoRun::FaseTerminada => app_para_eventos.emit("run:fase-terminada", ()),
+                    };
+                },
+            )
+            .await
+        };
 
         if let Err(e) = resultado {
             // Evento propio, no una línea más del log. Todo lo que puede
@@ -396,6 +440,58 @@ mod tests {
             .unwrap()
             .as_ref()
             .is_some_and(|guardado| !guardado.is_cancelled()));
+    }
+
+    /// El caso que motivó el guard: `ejecutar_fase` llama a
+    /// `adaptador.parse()` sobre la salida cruda de un escáner de
+    /// terceros, y un pánico ahí desenrolla la tarea `spawn`eada. Con la
+    /// limpieza a mano que había después del `await`, el slot se quedaba
+    /// en `Some` para siempre y `engagement_purge` -- el botón de
+    /// emergencia -- se negaba hasta reiniciar la aplicación.
+    ///
+    /// Se prueba el guard suelto, con el mismo criterio por el que
+    /// `reservar_ejecucion` se extrajo de `run_start`: no hace falta un
+    /// `tauri::App` ni un runtime async para comprobar quién vacía el
+    /// slot. El `catch_unwind` es el pánico del parser; el `assert` de
+    /// después, que la aplicación sigue siendo utilizable.
+    #[test]
+    fn el_guard_libera_el_slot_aunque_la_tarea_entre_en_panico() {
+        let state = AppState::new(PathBuf::new());
+        reservar_ejecucion(&state, &CancellationToken::new()).unwrap();
+
+        let panico = std::panic::catch_unwind(|| {
+            let _guardia = GuardaEjecucion::nueva(&state.ejecucion_activa);
+            panic!("adaptador.parse() sobre salida no confiable");
+        });
+
+        assert!(panico.is_err(), "el pánico tiene que haber ocurrido");
+        assert!(
+            state
+                .ejecucion_activa
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "el desenrollado tiene que haber vaciado el slot"
+        );
+        // Lo que de verdad se está probando: tras el pánico la purga
+        // vuelve a estar disponible en vez de negarse para siempre.
+        assert!(sin_ejecucion_en_marcha(&state).is_ok());
+    }
+
+    #[test]
+    fn el_guard_libera_el_slot_al_salir_del_ambito_sin_panico() {
+        let state = AppState::new(PathBuf::new());
+        reservar_ejecucion(&state, &CancellationToken::new()).unwrap();
+
+        {
+            let _guardia = GuardaEjecucion::nueva(&state.ejecucion_activa);
+            assert!(
+                state.ejecucion_activa.lock().unwrap().is_some(),
+                "mientras el guard vive, el slot sigue ocupado"
+            );
+        }
+
+        assert!(state.ejecucion_activa.lock().unwrap().is_none());
     }
 
     /// Un engagement con su directorio y su base, ya creado en un
