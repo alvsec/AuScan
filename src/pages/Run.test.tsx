@@ -116,6 +116,12 @@ describe("Run", () => {
 
     expect(screen.getByRole("button", { name: /lanzar/i })).toBeDisabled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Mientras la vista previa está en vuelo, `confirmando` sigue en
+    // false -- si los campos no se congelasen aquí también, el operador
+    // podría reescribir el objetivo mientras espera y lanzar contra un
+    // valor distinto del que acabará viendo en el diálogo.
+    expect(screen.getByLabelText(/objetivos/i)).toBeDisabled();
+    expect(screen.getByLabelText(/fase/i)).toBeDisabled();
 
     // Insistir no encadena una segunda vista previa en vuelo.
     await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
@@ -136,6 +142,11 @@ describe("Run", () => {
     );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("run_start", expect.anything());
+    // El `finally` que limpia `cargandoPrevisualizacion` tiene que
+    // correr también en el camino de error -- si se moviera dentro del
+    // `try`, el fallo más común (objetivo fuera de alcance) dejaría el
+    // botón muerto para siempre sin que ningún otro test lo notase.
+    expect(screen.getByRole("button", { name: /lanzar/i })).toBeEnabled();
   });
 
   it("llama a run_start solo tras confirmar", async () => {

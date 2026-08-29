@@ -83,7 +83,7 @@ export function Run() {
         id="fase"
         value={fase}
         onChange={(e) => setFase(e.target.value as (typeof FASES)[number])}
-        disabled={estado === "corriendo" || confirmando}
+        disabled={estado === "corriendo" || confirmando || cargandoPrevisualizacion}
       >
         {FASES.map((f) => (
           <option key={f} value={f}>
@@ -97,7 +97,7 @@ export function Run() {
         id="objetivos"
         value={objetivosTexto}
         onChange={(e) => setObjetivosTexto(e.target.value)}
-        disabled={estado === "corriendo" || confirmando}
+        disabled={estado === "corriendo" || confirmando || cargandoPrevisualizacion}
       />
 
       {!confirmando && (
