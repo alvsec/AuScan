@@ -14,10 +14,22 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { useRunStore } from "../store/useRunStore";
 import { Run } from "./Run";
 
+// El argv que devolvería `run_preview`: banderas reales que el frontend
+// no conoce ni construye. Que el diálogo enseñe ESTO y no algo armado en
+// la webview es justo lo que se está probando.
+const ARGV_PREVISTO = ["nmap -sn -PR -n -oX - 198.51.100.5"];
+
+// `invoke` tiene que distinguir dos comandos desde que existe la vista
+// previa, así que se despacha por nombre igual que hace Preflight.test.tsx.
+const despachar = (previa: () => Promise<unknown>) =>
+  invoke.mockImplementation((cmd: string) =>
+    cmd === "run_preview" ? previa() : Promise.resolve(undefined),
+  );
+
 describe("Run", () => {
   beforeEach(() => {
     invoke.mockReset();
-    invoke.mockResolvedValue(undefined);
+    despachar(() => Promise.resolve(ARGV_PREVISTO));
     useRunStore.setState({
       estado: "inactivo",
       lineas: [],
@@ -32,20 +44,54 @@ describe("Run", () => {
     expect(screen.getByRole("button", { name: /lanzar/i })).toBeDisabled();
   });
 
-  it("pide confirmación mostrando el argv antes de lanzar", async () => {
+  it("pide confirmación mostrando el argv real que devuelve el backend", async () => {
     render(<Run />);
     await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
     await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
 
-    expect(screen.getByRole("dialog")).toHaveTextContent("198.51.100.5");
-    expect(invoke).not.toHaveBeenCalled();
+    const dialogo = await screen.findByRole("dialog");
+    expect(dialogo).toHaveTextContent("nmap -sn -PR -n -oX - 198.51.100.5");
+    expect(invoke).toHaveBeenCalledWith("run_preview", {
+      phase: "discovery",
+      toolId: "nmap",
+      targets: ["198.51.100.5"],
+    });
+    // La vista previa no ejecuta nada: hasta confirmar, `run_start` no se
+    // ha llamado ni una vez.
+    expect(invoke).not.toHaveBeenCalledWith("run_start", expect.anything());
+  });
+
+  it("enseña una línea por invocación cuando la fase planifica varias", async () => {
+    despachar(() =>
+      Promise.resolve(["nmap -sV -oX - 198.51.100.5", "nmap -sV -oX - 198.51.100.6"]),
+    );
+    render(<Run />);
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.0/24");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+
+    const lista = await screen.findByTestId("previsualizacion");
+    expect(lista.querySelectorAll("li")).toHaveLength(2);
+    expect(lista).toHaveTextContent("198.51.100.6");
+  });
+
+  it("no abre el diálogo si la vista previa falla", async () => {
+    despachar(() => Promise.reject("objetivo fuera de alcance: 203.0.113.9"));
+    render(<Run />);
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "203.0.113.9");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "objetivo fuera de alcance: 203.0.113.9",
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("run_start", expect.anything());
   });
 
   it("llama a run_start solo tras confirmar", async () => {
     render(<Run />);
     await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
     await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
-    await userEvent.click(screen.getByRole("button", { name: /^ejecutar$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^ejecutar$/i }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("run_start", {
