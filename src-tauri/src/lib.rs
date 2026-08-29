@@ -216,6 +216,28 @@ fn reservar_ejecucion(state: &AppState, cancelar: &CancellationToken) -> Result<
     Ok(())
 }
 
+/// ¿El `Err` con el que terminó de esperarse un `JoinHandle` significa
+/// que la tarea entró en pánico?
+///
+/// `tauri::async_runtime::JoinHandle<T>` implementa `Future` con
+/// `Output = tauri::Result<T>`, NO con el `Result<T, JoinError>` crudo de
+/// tokio: su `poll` convierte el `JoinError` en `tauri::Error::JoinError`
+/// (ver `async_runtime.rs` de tauri 2.11). O sea que `is_panic()` no está
+/// a mano en el error que se recibe -- hay que desenvolver la variante
+/// primero, y por eso esto es una función y no una llamada suelta.
+///
+/// Ese `Err` solo aparece por dos motivos: la tarea entró en pánico, o la
+/// tarea fue abortada. NUNCA por el `Err` del `Result` que devuelve el
+/// futuro de dentro, que llega como `Ok(Err(..))`. Ahí está la gracia:
+/// filtrar por pánico deja fuera, por construcción, los dos caminos que
+/// ya emiten su propio evento terminal, sin riesgo de emitirlo dos veces.
+///
+/// Se separa además para poder probarla: comprobar que discrimina bien un
+/// pánico de un final normal no necesita ni `AppHandle` ni ventana.
+fn la_tarea_entro_en_panico(error: &tauri::Error) -> bool {
+    matches!(error, tauri::Error::JoinError(e) if e.is_panic())
+}
+
 /// Devuelve el slot de `ejecucion_activa` a `None` al destruirse, pase lo
 /// que pase.
 ///
@@ -286,7 +308,12 @@ async fn run_start(
     // vuelve antes de que la tarea termine. `app: AppHandle` sí es
     // `Clone + Send + 'static` -- se mueve entero dentro del bloque y
     // `app.state::<AppState>()` se vuelve a pedir AHÍ DENTRO, nunca antes.
-    tauri::async_runtime::spawn(async move {
+    //
+    // El clon para el vigía de más abajo se saca AQUÍ, antes del `spawn`:
+    // dentro del bloque ya sería tarde, porque `app` entra entero en el
+    // `async move` y desde fuera no queda nada que clonar.
+    let app_para_panico = app.clone();
+    let manejo = tauri::async_runtime::spawn(async move {
         let state_interna = app.state::<AppState>();
 
         // El bloque delimita la vida del guard: se libera el slot en
@@ -388,6 +415,58 @@ async fn run_start(
                 "run:fase-terminada",
                 serde_json::json!({ "hosts": 0, "servicios": 0, "observaciones": 0 }),
             );
+        }
+    });
+
+    // Vigía del pánico. Los dos finales que DEVUELVE la tarea de arriba
+    // ya avisan al frontend: el éxito emite "run:fase-terminada" desde
+    // dentro de `ejecutar_fase`, y el error lo emite el bloque que acaba
+    // aquí mismo. El tercer final no avisaba a nadie. Un pánico dentro de
+    // `adaptador.parse()` -- el mismo camino que `GuardaEjecucion` ya
+    // contempla, sobre la salida cruda no confiable de un escáner de
+    // terceros -- desenrolla la tarea, tokio se lo traga en la frontera
+    // del `spawn`, la aplicación sigue viva y NO sale ni un evento. Como
+    // `useRunStore` solo abandona el estado "corriendo" al recibir
+    // "run:fase-terminada", la pantalla se quedaba congelada para
+    // siempre: fase y objetivos deshabilitados, el botón de lanzar
+    // escondido, y el de cancelar visible pero inútil (el slot de
+    // `ejecucion_activa` ya está libre a esas alturas, que de eso se
+    // encarga el `Drop` del guard). Sin ninguna pista de que la única
+    // salida era reiniciar la aplicación entera.
+    //
+    // Antes el `JoinHandle` se tiraba a la basura; ahora se queda, y esta
+    // segunda tarea -- que no hace más que esperar -- cierra el hueco
+    // emitiendo la pareja de eventos que faltaba.
+    tauri::async_runtime::spawn(async move {
+        if let Err(error_union) = manejo.await {
+            // SOLO el pánico. Un `Err` de la fase llega como `Ok(Err(..))`
+            // y no pisa por aquí, así que no hay forma de emitir dos veces
+            // los mismos eventos.
+            if la_tarea_entro_en_panico(&error_union) {
+                // Sin `e.to_string()` que enseñar: el mensaje del pánico
+                // se lo queda tokio. Mejor una frase honesta que decir
+                // que la fase terminó y ya está.
+                let _ = app_para_panico.emit(
+                    "run:error",
+                    serde_json::json!({
+                        "mensaje": "la fase terminó de forma inesperada (fallo interno)",
+                    }),
+                );
+                // Y este es el que de verdad descongela la pantalla. Con
+                // el recuento a cero por la misma razón que en el camino
+                // de error de arriba: una sola forma de carga para el
+                // evento, y `Run.tsx` no enseña recuento ninguno mientras
+                // haya `error` puesto, que es justo lo que acaba de
+                // emitirse.
+                let _ = app_para_panico.emit(
+                    "run:fase-terminada",
+                    serde_json::json!({ "hosts": 0, "servicios": 0, "observaciones": 0 }),
+                );
+            }
+            // El otro `Err` posible sería la tarea abortada, pero nadie
+            // llama a `abort()` sobre este handle -- la cancelación de
+            // AUscan va por `CancellationToken`, que termina la fase de
+            // forma ordenada y por tanto por el camino del `Ok`.
         }
     });
 
@@ -565,6 +644,76 @@ mod tests {
         // Lo que de verdad se está probando: tras el pánico la purga
         // vuelve a estar disponible en vez de negarse para siempre.
         assert!(sin_ejecucion_en_marcha(&state).is_ok());
+    }
+
+    /// El otro lado del mismo pánico. El guard de arriba deja la
+    /// aplicación utilizable, pero la PANTALLA seguía congelada: sin
+    /// evento terminal, `useRunStore` no abandona nunca el estado
+    /// "corriendo". El vigía del `JoinHandle` existe para emitirlo, y
+    /// tiene que hacerlo SOLO ante un pánico: los otros dos finales ya
+    /// emiten el suyo y emitirlo dos veces sería peor que no emitirlo.
+    ///
+    /// Se prueba el discriminador suelto, con el mismo criterio que
+    /// `reservar_ejecucion` y el guard: las dos llamadas a `app.emit(..)`
+    /// necesitan un `tauri::App` de verdad, pero decidir SI hay que
+    /// emitir no necesita nada. Eso sí, esta parte no se puede probar en
+    /// seco -- hace falta un runtime asíncrono y una tarea que se
+    /// desenrolle de verdad --, así que va como `#[tokio::test]` y con
+    /// `tauri::async_runtime::spawn`, el mismo de `run_start`, para que
+    /// el tipo del error sea exactamente el que se verá en producción.
+    ///
+    /// (La traza de pánico que escupe la salida del test es la de la
+    /// tarea que se desenrolla a propósito: es lo que se está probando.)
+    #[tokio::test]
+    async fn el_vigia_solo_reacciona_al_panico_de_la_tarea() {
+        // 1. Pánico: el caso que hay que atrapar. Es el `parse()` sobre
+        //    la salida cruda de un escáner de terceros.
+        let manejo = tauri::async_runtime::spawn(async {
+            panic!("adaptador.parse() sobre salida no confiable");
+        });
+        let error = manejo
+            .await
+            .expect_err("una tarea en pánico no puede terminar en Ok");
+        assert!(
+            la_tarea_entro_en_panico(&error),
+            "el pánico tiene que reconocerse como tal: es el único caso en \
+             que el vigía emite los eventos que descongelan la pantalla"
+        );
+
+        // 2. Éxito. `ejecutar_fase` ya emitió "run:fase-terminada" desde
+        //    dentro; el vigía no puede ni acercarse.
+        let manejo = tauri::async_runtime::spawn(async { Ok::<(), error::AppError>(()) });
+        assert!(
+            matches!(manejo.await, Ok(Ok(()))),
+            "una tarea que termina bien no le llega al vigía como Err"
+        );
+
+        // 3. `Err` de la fase. Es el que más importa de los tres: llega
+        //    como `Ok(Err(..))`, NUNCA como `Err` del `JoinHandle`, así
+        //    que el camino de error de `run_start` -- que ya emite
+        //    "run:error" y "run:fase-terminada" -- no puede duplicarse.
+        let manejo =
+            tauri::async_runtime::spawn(async { Err::<(), _>(error::AppError::RunAlreadyActive) });
+        let interno = manejo
+            .await
+            .expect("un Err del futuro no es un fallo de la tarea");
+        assert!(interno.is_err());
+
+        // 4. Abortada: el otro `Err` que un `JoinHandle` sabe dar. Hoy
+        //    nadie llama a `abort()` sobre este handle, pero si alguien
+        //    lo hiciera algún día, no es un pánico y no debe disparar el
+        //    aviso de "fallo interno".
+        let manejo = tauri::async_runtime::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        manejo.abort();
+        let error = manejo
+            .await
+            .expect_err("una tarea abortada no termina bien");
+        assert!(
+            !la_tarea_entro_en_panico(&error),
+            "una cancelación no es un pánico"
+        );
     }
 
     #[test]
