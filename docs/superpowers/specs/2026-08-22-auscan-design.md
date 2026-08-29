@@ -719,6 +719,23 @@ correr — la misma línea que quedará en `tool_run.argv_json` — y confirma
 explícitamente. Barato de construir, y coherente con la regla de
 trazabilidad: nada se ejecuta sin que el operador haya visto qué es.
 
+**Limitación conocida, aceptada:** esa identidad exacta se apoya en que
+`planificar` (la función que calcula el argv, compartida por la vista previa
+y la ejecución real) se llama dos veces — una para enseñar, otra para
+lanzar — y ambas resuelven el nombre de host si el objetivo es un nombre y no
+una dirección literal. Si ese nombre tiene varias direcciones A, nada
+garantiza que las dos resoluciones DNS devuelvan el mismo conjunto ni el
+mismo orden, así que el argv confirmado y el que queda grabado en
+`tool_run.argv_json` podrían no coincidir byte a byte para ese caso concreto.
+Esto **no** compromete el alcance — el objetivo ejecutado pasa igualmente por
+`Scope::validate_target` en el momento de lanzar, así que nunca escapa nada
+fuera de lo autorizado — y no afecta a direcciones literales, que son
+deterministas. Es una brecha estrecha en la garantía de trazabilidad exacta
+de esta sección, aceptada conscientemente en la Fase 5 en vez de invertir en
+un mecanismo de caché del plan del lado del backend; revisar si algún
+engagement real llega a depender de objetivos por nombre con varias
+direcciones.
+
 ### 9.8 Alcance de la Fase 5
 
 Pantalla de ejecución en vivo (lanzar, ver el log en tiempo real, progreso,
