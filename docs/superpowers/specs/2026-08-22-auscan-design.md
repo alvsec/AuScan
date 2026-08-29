@@ -639,6 +639,109 @@ reserva, no de ARP real. Evidencia completa y análisis en
 B deja de ser opcional y sube en el plan de fases (§14) a justo detrás de la
 Fase 5.
 
+### 8.7 Spike de la propia B — dos preguntas que la razón sola no contestaba
+
+Antes de diseñar la Fase 6 hacía falta verificar dos supuestos de B con la
+misma disciplina que el spike de ChmodBPF: en la propia máquina del
+consultor, con `osascript -e '… with administrator privileges'` de verdad.
+
+1. **¿Sigue habiendo streaming en vivo a través de la elevación?** `do shell
+   script` bloquea hasta que el comando entero termina y solo entonces
+   devuelve la salida completa — si el streaming dependiera de leer esa
+   salida, se rompería. Probado: redirigiendo la salida del comando elevado a
+   un fichero y leyendo ese fichero por cuenta propia mientras `osascript`
+   sigue bloqueado de fondo, el fichero crece línea a línea. El streaming no
+   depende de la salida de `osascript` — depende de que alguien lea el
+   fichero al que se está escribiendo, y eso es asunto nuestro, no de
+   AppleScript.
+2. **¿Cachea macOS la autorización entre invocaciones cercanas, como hace
+   `sudo` en una terminal?** Probado con dos llamadas `with administrator
+   privileges` seguidas, segundos aparte: **no** — la segunda pidió
+   contraseña otra vez. `do shell script` no hereda la ventana de gracia de
+   `sudo`.
+
+El segundo resultado es el que decide la forma de la Fase 6. Elevar
+invocación por invocación es inviable: una fase Services con veinte hosts
+pediría contraseña veinte veces. Hace falta elevar una sola vez por **fase**,
+no por invocación — ver §8.8.
+
+### 8.8 Componentes de la Fase 6
+
+- **`privilege.rs`** (ya previsto en la estructura del repo, §4): decide si
+  una fase necesita privilegio y gestiona el ciclo de vida completo del
+  trabajador elevado — arrancarlo, pasarle órdenes, apagarlo.
+- **Un binario nuevo y pequeño**, análogo a `gen-fixtures` (§4, §7.6): el
+  propio proceso que `osascript` lanza `with administrator privileges`. Su
+  única responsabilidad es mecánica — leer una orden (binario, argv, ruta de
+  salida), lanzar exactamente ese proceso, redirigir su stdout/stderr al
+  fichero indicado, vigilar un centinela de cancelación y matar a su hijo si
+  aparece, escribir su código de salida al terminar. **No lleva lógica de
+  alcance ni de política**: el guard y la verja ya se evaluaron en el
+  proceso principal antes de que la orden llegue aquí (§8.5, segundo punto);
+  el trabajador ejecuta lo que se le manda, nunca lo juzga.
+- **`orchestrator.rs` no cambia de forma.** El bucle sobre invocaciones, la
+  verja, la revalidación de versión, la persistencia (§9.1) — todo igual.
+  Cuando una invocación necesita privilegio, en vez de que
+  `exec::ejecutar()` lance el proceso directamente, `privilege.rs` le pasa la
+  orden al trabajador ya vivo; `orchestrator.rs` lee el mismo fichero de
+  salida que el trabajador va escribiendo, reutilizando el divisor de líneas
+  de `AcumuladorLineas` (§9.2) que ya existe para el streaming sin
+  privilegios. El streaming en vivo es una sola implementación con dos
+  fuentes posibles, no dos implementaciones.
+
+### 8.9 Ciclo de vida del trabajador
+
+Un trabajador por **fase**, no por invocación ni por sesión de la app.
+Arranca al lanzar la fase si hace falta privilegio, muere al terminar la
+fase — con éxito, con error o cancelada. Como una fase puede planificar
+varias invocaciones (una por host en Services), el trabajador es un bucle:
+ejecuta una orden, informa, espera la siguiente.
+
+Minimizar cuánto tiempo hay un proceso root vivo importa: sigue siendo
+"elevación por ejecución, opt-in, sin credenciales guardadas" (§8.5, T8 en
+§12), nunca un demonio de fondo.
+
+Si el operador rechaza el diálogo de autorización, la fase falla con un
+mensaje claro. **No hay fallback silencioso a modo sin privilegios** — eso
+cambiaría lo que se escanea sin que el operador lo decidiera, y el operador
+ya vio el argv exacto en la confirmación (§9.7) antes de llegar aquí.
+
+**Apagar el trabajador es la misma clase de problema que cancelar una
+invocación suya.** La app no puede matar un proceso root — `EPERM`, el
+hecho que origina todo este apartado (§8.3) — así que "para la invocación en
+curso" y "termina del todo" no pueden ser algo que la app le imponga desde
+fuera: tienen que ser centinelas que el propio trabajador vigila y sobre los
+que actúa él mismo, root matando a root.
+
+### 8.10 Protocolo de control
+
+Ficheros normales, no un FIFO — es literalmente el mecanismo que el spike
+de §8.7 acaba de validar, y evita cualquier problema de permisos entre el
+proceso root y el proceso sin privilegios (un FIFO compartido entre un
+dueño root y un dueño normal es justo el tipo de detalle que sale mal en
+producción y no en el spike). Viven en un directorio de control temporal
+por fase, fuera de `raw/` — `raw/` se queda exactamente como está: solo la
+salida real de la herramienta, nada de la fontanería que la hizo posible.
+
+Seis tipos de fichero, cuatro por invocación y dos por fase entera:
+
+- **Orden** (por invocación): JSON con el binario resuelto, el argv exacto y
+  las rutas de los ficheros de salida. Lo escribe
+  `orchestrator.rs`/`privilege.rs`; el trabajador lo lee y actúa.
+- **Salida** (por invocación, DOS ficheros: stdout y stderr por separado).
+  El trabajador redirige cada flujo al suyo — nunca mezclados, por la misma
+  razón que `exec::ejecutar()` ya los mantiene separados sin privilegios
+  (§9.2): la UI distingue `[stdout]` de `[stderr]` en el log en vivo, y
+  mezclarlos aquí perdería esa distinción solo en el camino privilegiado.
+  `orchestrator.rs` hace tail de ambos exactamente como ya hace tail de la
+  salida de un proceso sin privilegios.
+- **Estado** (por invocación): código de salida, escrito por el trabajador
+  al terminar. `orchestrator.rs` lo sondea para saber cuándo ha acabado cada
+  invocación.
+- **Centinelas** (por fase): uno de cancelar (mata al hijo en curso, el
+  trabajador sigue vivo esperando la siguiente orden o el de detener) y uno
+  de detener (el trabajador sale del bucle entero).
+
 ---
 
 ## 9. Ejecución, streaming y cancelación (Fase 5)
@@ -906,8 +1009,8 @@ retrofiteándolo.
 | 2 | ✅ Alcance + guard `in_scope` + tests + espejo TS con test de paridad |
 | 3 | ✅ Trait de adaptador + verja + detección de herramientas + pantalla de preflight |
 | 4 | ✅ Adaptador nmap (descubrimiento y servicios), parser XML, fixtures sintéticos, `gen-fixtures` |
-| 5 | UI de ejecución: streaming, progreso, cancelación |
-| 6 | Elevación de privilegios — antes condicional ("Fase 9"); el spike de la Fase 0 la confirmó necesaria, así que sube aquí, justo detrás de la Fase 5 |
+| 5 | ✅ UI de ejecución: streaming, progreso, cancelación — ver §9 |
+| 6 | Elevación de privilegios — antes condicional ("Fase 9"); el spike de la Fase 0 la confirmó necesaria, así que sube aquí, justo detrás de la Fase 5. Diseño y su propio spike de validación en §8.7–§8.10 |
 | 7 | Exportadores + `resumen.md` |
 | 8 | Purga + auditoría de privacidad |
 | 9 | Adaptadores httpx y nuclei |
