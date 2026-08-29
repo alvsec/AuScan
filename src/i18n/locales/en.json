@@ -75,6 +75,6 @@
     "cancelarEjecucionBoton": "Cancel execution",
     "corriendo": "Running…",
     "sinLineas": "No output yet.",
-    "recuento": "{{n}} log lines"
+    "recuento": "{{hosts}} hosts, {{servicios}} services, {{observaciones}} observations"
   }
 }

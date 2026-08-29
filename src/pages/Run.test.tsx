@@ -34,6 +34,7 @@ describe("Run", () => {
       estado: "inactivo",
       lineas: [],
       runsTerminados: [],
+      recuentoFinal: null,
       error: null,
       _desuscribir: null,
     });
@@ -109,6 +110,21 @@ describe("Run", () => {
     });
     render(<Run />);
     expect(screen.getByTestId("log")).toHaveTextContent("hola");
+  });
+
+  it("no enseña recuento hasta que la fase termina", () => {
+    useRunStore.setState({ estado: "corriendo" });
+    render(<Run />);
+    expect(screen.queryByText(/observaciones/i)).not.toBeInTheDocument();
+  });
+
+  it("enseña el recuento de lo archivado al terminar la fase", () => {
+    useRunStore.setState({
+      estado: "inactivo",
+      recuentoFinal: { hosts: 3, servicios: 7, observaciones: 11 },
+    });
+    render(<Run />);
+    expect(screen.getByText("3 hosts, 7 servicios, 11 observaciones")).toBeInTheDocument();
   });
 
   it("el botón de lanzar está deshabilitado mientras corre", () => {

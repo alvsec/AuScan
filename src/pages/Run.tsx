@@ -11,7 +11,7 @@ const mensaje = (e: unknown): string =>
 
 export function Run() {
   const { t } = useTranslation();
-  const { estado, lineas, runsTerminados, error, iniciar, cancelar } = useRunStore();
+  const { estado, lineas, runsTerminados, recuentoFinal, error, iniciar, cancelar } = useRunStore();
   const [fase, setFase] = useState<(typeof FASES)[number]>("discovery");
   const [objetivosTexto, setObjetivosTexto] = useState("");
   const [confirmando, setConfirmando] = useState(false);
@@ -123,7 +123,17 @@ export function Run() {
 
       {error && <p role="alert">{error}</p>}
 
-      <p>{t("run.recuento", { n: lineas.length })}</p>
+      {/* Lo que la fase archivó, no cuántas líneas escupió: el número de
+          líneas de log no le dice al operador nada sobre el expediente. */}
+      {recuentoFinal && (
+        <p>
+          {t("run.recuento", {
+            hosts: recuentoFinal.hosts,
+            servicios: recuentoFinal.servicios,
+            observaciones: recuentoFinal.observaciones,
+          })}
+        </p>
+      )}
       <pre data-testid="log">
         {lineas.length === 0
           ? t("run.sinLineas")

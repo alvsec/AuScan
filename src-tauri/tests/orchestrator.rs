@@ -246,9 +246,20 @@ async fn ejecutar_fase_persiste_lo_que_parse_devuelve() {
     assert!(sucesos
         .iter()
         .any(|s| matches!(s, SucesoRun::RunTerminado { status, .. } if status == "ok")));
-    assert!(sucesos
-        .iter()
-        .any(|s| matches!(s, SucesoRun::FaseTerminada)));
+    // El recuento del fin de fase cuenta lo que se ARCHIVÓ, y tiene que
+    // cuadrar con lo que `parse()` devolvió: un host, ningún servicio,
+    // una observación.
+    assert!(
+        sucesos.iter().any(|s| matches!(
+            s,
+            SucesoRun::FaseTerminada {
+                hosts: 1,
+                servicios: 0,
+                observaciones: 1
+            }
+        )),
+        "el fin de fase tiene que traer el recuento de lo persistido"
+    );
 
     let guard = state.open.lock().unwrap();
     let conn = &guard.as_ref().unwrap().conn;
@@ -437,10 +448,17 @@ async fn una_fase_cancelada_antes_de_empezar_no_deja_rastro() {
     );
 
     let sucesos = sucesos.lock().unwrap();
+    // Y con el recuento a cero: una fase que no ejecutó nada no archivó
+    // nada, así que enseñar cualquier otra cifra sería inventarla.
     assert!(
-        sucesos
-            .iter()
-            .any(|s| matches!(s, SucesoRun::FaseTerminada)),
+        sucesos.iter().any(|s| matches!(
+            s,
+            SucesoRun::FaseTerminada {
+                hosts: 0,
+                servicios: 0,
+                observaciones: 0
+            }
+        )),
         "la fase tiene que señalar su fin aunque se corte por cancelación"
     );
 }

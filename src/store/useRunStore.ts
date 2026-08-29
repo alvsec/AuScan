@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { create } from "zustand";
 
 import { api } from "../data/runs";
-import type { LineaLog, RunDone, RunError } from "../domain/model/run";
+import type { FaseTerminada, LineaLog, RunDone, RunError } from "../domain/model/run";
 
 type EstadoRun = "inactivo" | "corriendo";
 
@@ -10,6 +10,7 @@ type RunStore = {
   estado: EstadoRun;
   lineas: LineaLog[];
   runsTerminados: RunDone[];
+  recuentoFinal: FaseTerminada | null;
   error: string | null;
   iniciar: (phase: string, toolId: string, targets: string[]) => Promise<void>;
   cancelar: () => Promise<void>;
@@ -28,12 +29,20 @@ export const useRunStore = create<RunStore>((set, get) => ({
   estado: "inactivo",
   lineas: [],
   runsTerminados: [],
+  recuentoFinal: null,
   error: null,
   _desuscribir: null,
 
   iniciar: async (phase, toolId, targets) => {
     get()._desuscribir?.forEach((unlisten) => unlisten());
-    set({ estado: "corriendo", lineas: [], runsTerminados: [], error: null, _desuscribir: null });
+    set({
+      estado: "corriendo",
+      lineas: [],
+      runsTerminados: [],
+      recuentoFinal: null,
+      error: null,
+      _desuscribir: null,
+    });
     try {
       const unlisten = await get()._suscribir();
       set({ _desuscribir: unlisten });
@@ -60,8 +69,8 @@ export const useRunStore = create<RunStore>((set, get) => ({
     const unlistenDone = await listen<RunDone>("run:done", (evento) => {
       set((s) => ({ runsTerminados: [...s.runsTerminados, evento.payload] }));
     });
-    const unlistenFase = await listen("run:fase-terminada", () => {
-      set({ estado: "inactivo" });
+    const unlistenFase = await listen<FaseTerminada>("run:fase-terminada", (evento) => {
+      set({ estado: "inactivo", recuentoFinal: evento.payload });
     });
     // Los fallos que ocurren DESPUÉS de que `run_start` haya devuelto
     // (el objetivo fuera de alcance, sobre todo) no llegan como rechazo

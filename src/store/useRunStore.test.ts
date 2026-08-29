@@ -29,7 +29,14 @@ import { useRunStore } from "./useRunStore";
 
 describe("useRunStore", () => {
   beforeEach(() => {
-    useRunStore.setState({ estado: "inactivo", lineas: [], runsTerminados: [], error: null, _desuscribir: null });
+    useRunStore.setState({
+      estado: "inactivo",
+      lineas: [],
+      runsTerminados: [],
+      recuentoFinal: null,
+      error: null,
+      _desuscribir: null,
+    });
     invoke.mockReset();
   });
 
@@ -50,8 +57,31 @@ describe("useRunStore", () => {
   it("vuelve a inactivo cuando llega run:fase-terminada", async () => {
     invoke.mockResolvedValue(undefined);
     await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
-    listeners["run:fase-terminada"]!({ payload: undefined });
+    listeners["run:fase-terminada"]!({ payload: { hosts: 0, servicios: 0, observaciones: 0 } });
     expect(useRunStore.getState().estado).toBe("inactivo");
+  });
+
+  // El recuento viene del backend, que cuenta lo que `parse()` archivó de
+  // verdad. El frontend no lo deriva de nada que tenga a mano -- ni del
+  // número de líneas de log ni de los runs terminados --, así que si no
+  // se guardara del evento no habría de dónde sacarlo.
+  it("guarda el recuento que trae run:fase-terminada", async () => {
+    invoke.mockResolvedValue(undefined);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    listeners["run:fase-terminada"]!({ payload: { hosts: 3, servicios: 7, observaciones: 11 } });
+    expect(useRunStore.getState().recuentoFinal).toEqual({
+      hosts: 3,
+      servicios: 7,
+      observaciones: 11,
+    });
+  });
+
+  it("limpia el recuento de la fase anterior al iniciar otra", async () => {
+    invoke.mockResolvedValue(undefined);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    listeners["run:fase-terminada"]!({ payload: { hosts: 3, servicios: 7, observaciones: 11 } });
+    await useRunStore.getState().iniciar("services", "nmap", ["198.51.100.5"]);
+    expect(useRunStore.getState().recuentoFinal).toBeNull();
   });
 
   it("guarda el error y vuelve a inactivo si start falla", async () => {

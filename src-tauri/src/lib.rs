@@ -338,7 +338,18 @@ async fn run_start(
                             "run:done",
                             serde_json::json!({ "seq": seq, "status": status }),
                         ),
-                        SucesoRun::FaseTerminada => app_para_eventos.emit("run:fase-terminada", ()),
+                        SucesoRun::FaseTerminada {
+                            hosts,
+                            servicios,
+                            observaciones,
+                        } => app_para_eventos.emit(
+                            "run:fase-terminada",
+                            serde_json::json!({
+                                "hosts": hosts,
+                                "servicios": servicios,
+                                "observaciones": observaciones,
+                            }),
+                        ),
                     };
                 },
             )
@@ -362,7 +373,15 @@ async fn run_start(
             // camino de error, el store del frontend (Task 7) -- que solo
             // sale de "corriendo" al recibir este evento -- se quedaría
             // atascado ante cualquier fallo a mitad de fase.
-            let _ = app.emit("run:fase-terminada", ());
+            //
+            // Con el recuento a cero, y no omitido: un camino de error no
+            // tiene una fase terminada que contar. Cero es la respuesta
+            // honesta, y además la única que mantiene una sola forma de
+            // carga para el evento.
+            let _ = app.emit(
+                "run:fase-terminada",
+                serde_json::json!({ "hosts": 0, "servicios": 0, "observaciones": 0 }),
+            );
         }
     });
 

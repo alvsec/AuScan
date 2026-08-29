@@ -19,9 +19,22 @@ use crate::state::AppState;
 
 /// Lo que le pasa a quien esté viendo la ejecución en vivo.
 pub enum SucesoRun {
-    Log { origen: LineaOrigen, texto: String },
-    RunTerminado { seq: i64, status: String },
-    FaseTerminada,
+    Log {
+        origen: LineaOrigen,
+        texto: String,
+    },
+    RunTerminado {
+        seq: i64,
+        status: String,
+    },
+    /// Lo que la fase entera dejó ARCHIVADO, sumando invocación a
+    /// invocación: no lo que el escáner vio ni lo que se planificó, sino
+    /// lo que `parse()` normalizó y se llegó a escribir en la base.
+    FaseTerminada {
+        hosts: usize,
+        servicios: usize,
+        observaciones: usize,
+    },
 }
 
 fn fase_str(f: Phase) -> &'static str {
@@ -132,6 +145,10 @@ pub async fn ejecutar_fase(
         opciones,
     )?;
 
+    let mut total_hosts = 0usize;
+    let mut total_servicios = 0usize;
+    let mut total_observaciones = 0usize;
+
     for invocacion in invocaciones {
         // Cancelar una fase tiene que PARARLA, no solo hacer que cada
         // invocación restante nazca muerta. Sin este corte, una fase
@@ -145,7 +162,7 @@ pub async fn ejecutar_fase(
         if cancelar.is_cancelled() {
             break;
         }
-        ejecutar_invocacion(
+        let (hosts, servicios, observaciones) = ejecutar_invocacion(
             state,
             registro,
             tool_id,
@@ -156,11 +173,23 @@ pub async fn ejecutar_fase(
             &mut on_suceso,
         )
         .await?;
+        total_hosts += hosts;
+        total_servicios += servicios;
+        total_observaciones += observaciones;
     }
-    on_suceso(SucesoRun::FaseTerminada);
+    on_suceso(SucesoRun::FaseTerminada {
+        hosts: total_hosts,
+        servicios: total_servicios,
+        observaciones: total_observaciones,
+    });
     Ok(())
 }
 
+/// Devuelve `(hosts, servicios, observaciones)`: lo que ESTA invocación
+/// aportó a la base. Es `(0, 0, 0)` cuando no hubo nada que archivar --
+/// se canceló, la herramienta falló, o `parse()` no supo interpretar la
+/// salida --, porque el recuento tiene que contar lo que de verdad se
+/// escribió, no lo que se esperaba escribir.
 #[allow(clippy::too_many_arguments)]
 async fn ejecutar_invocacion(
     state: &AppState,
@@ -171,7 +200,7 @@ async fn ejecutar_invocacion(
     privilegio_disponible: bool,
     cancelar: CancellationToken,
     on_suceso: &mut (impl FnMut(SucesoRun) + Send + 'static),
-) -> Result<()> {
+) -> Result<(usize, usize, usize)> {
     let adaptador = registro
         .iter()
         .find(|a| a.descriptor().id == tool_id)
@@ -296,6 +325,7 @@ async fn ejecutar_invocacion(
     // soltar el lock: `std::sync::Mutex` no es reentrante, y un
     // `on_suceso` que llegara a tocar `state.open` se autobloquearía.
     let mut aviso_parseo: Option<String> = None;
+    let mut recuento = (0usize, 0usize, 0usize);
 
     {
         let guard = state.open.lock().unwrap_or_else(|e| e.into_inner());
@@ -338,6 +368,11 @@ async fn ejecutar_invocacion(
                         &normalizado.observations,
                         &db::now_iso(),
                     )?;
+                    recuento = (
+                        normalizado.hosts.len(),
+                        normalizado.services.len(),
+                        normalizado.observations.len(),
+                    );
                 }
                 Err(e) => {
                     aviso_parseo = Some(format!("no se pudo interpretar la salida: {e}"));
@@ -357,5 +392,5 @@ async fn ejecutar_invocacion(
         seq,
         status: status.to_string(),
     });
-    Ok(())
+    Ok(recuento)
 }
