@@ -149,8 +149,18 @@ export function Run() {
       {error && <p role="alert">{error}</p>}
 
       {/* Lo que la fase archivó, no cuántas líneas escupió: el número de
-          líneas de log no le dice al operador nada sobre el expediente. */}
-      {recuentoFinal && (
+          líneas de log no le dice al operador nada sobre el expediente.
+          Con `error` puesto NO se enseña recuento ninguno: el camino de
+          error de `run_start` emite "run:fase-terminada" con ceros
+          cableados, pero una fase que falla en su n-ésima invocación ya
+          ha archivado hosts, servicios y observaciones reales de las
+          n-1 anteriores. Enseñar «0 hosts, 0 servicios, 0 observaciones»
+          bajo el error sería falso sobre lo que hay en el expediente, y
+          este programa no es más que ese expediente. Callar el número
+          -- y que el operador mire el expediente -- es lo honesto; sacar
+          los totales parciales por el camino de error costaría mucha
+          fontanería para un caso que solo ocurre al fallar. */}
+      {!error && recuentoFinal && (
         <p>
           {t("run.recuento", {
             hosts: recuentoFinal.hosts,

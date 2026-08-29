@@ -177,6 +177,23 @@ describe("Run", () => {
     expect(screen.getByText("3 hosts, 7 servicios, 11 observaciones")).toBeInTheDocument();
   });
 
+  // Un fallo a mitad de fase corta `ejecutar_fase` antes de que acumule
+  // nada, así que el camino de error de `run_start` emite
+  // "run:fase-terminada" con ceros cableados -- pero las invocaciones que
+  // sí terminaron antes del fallo ya escribieron filas reales. Enseñar
+  // «0 hosts, 0 servicios, 0 observaciones» bajo el error sería mentir
+  // sobre el expediente.
+  it("no enseña recuento cuando la ejecución terminó en error", () => {
+    useRunStore.setState({
+      estado: "inactivo",
+      error: "objetivo fuera de alcance: 203.0.113.9",
+      recuentoFinal: { hosts: 0, servicios: 0, observaciones: 0 },
+    });
+    render(<Run />);
+    expect(screen.getByRole("alert")).toHaveTextContent("objetivo fuera de alcance: 203.0.113.9");
+    expect(screen.queryByText(/observaciones/i)).not.toBeInTheDocument();
+  });
+
   it("el botón de lanzar está deshabilitado mientras corre", () => {
     useRunStore.setState({ estado: "corriendo" });
     render(<Run />);

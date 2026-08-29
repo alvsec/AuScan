@@ -374,10 +374,16 @@ async fn run_start(
             // sale de "corriendo" al recibir este evento -- se quedaría
             // atascado ante cualquier fallo a mitad de fase.
             //
-            // Con el recuento a cero, y no omitido: un camino de error no
-            // tiene una fase terminada que contar. Cero es la respuesta
-            // honesta, y además la única que mantiene una sola forma de
-            // carga para el evento.
+            // Con el recuento a cero, y no omitido: mantener una sola
+            // forma de carga para el evento le ahorra al frontend un caso
+            // más. Pero OJO: estos ceros NO son el recuento real. Si la
+            // fase falla en su n-ésima invocación, `ejecutar_fase` se
+            // corta con `?` antes de acumular nada, y sin embargo las
+            // n-1 invocaciones anteriores ya escribieron hosts,
+            // servicios y observaciones de verdad en la base. Por eso
+            // Run.tsx NO enseña recuento ninguno cuando hay `error`
+            // puesto: enseñar estos ceros bajo la alerta sería una
+            // afirmación falsa sobre lo que hay archivado.
             let _ = app.emit(
                 "run:fase-terminada",
                 serde_json::json!({ "hosts": 0, "servicios": 0, "observaciones": 0 }),
