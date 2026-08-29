@@ -55,12 +55,22 @@ export function Run() {
       {/* htmlFor/id explícitos, no envoltura implícita: es el patrón que
           ya usa Scope.tsx para todas sus etiquetas (p.ej. "entrada",
           "objetivo"), a diferencia de <label>texto<select/></label>. */}
+      {/* `confirmando` bloquea la fase y los objetivos además de
+          `corriendo`: el diálogo tiene que ser MODAL de verdad. `lanzar()`
+          lee el `fase`/`objetivos` VIVOS, no aquellos con los que se
+          calculó `previsualizacion`, así que si estos siguieran editables
+          el operador podría previsualizar el objetivo A, ver el argv de A,
+          cambiar el textarea a B con el diálogo abierto y pulsar
+          «Ejecutar»: lanzaría B habiendo autorizado A. Sería la misma
+          mentira que la vista previa con argv real existe para cerrar,
+          solo que un paso más tarde. Con el diálogo abierto solo se puede
+          confirmar o cancelar. */}
       <label htmlFor="fase">{t("run.fase")}</label>
       <select
         id="fase"
         value={fase}
         onChange={(e) => setFase(e.target.value as (typeof FASES)[number])}
-        disabled={estado === "corriendo"}
+        disabled={estado === "corriendo" || confirmando}
       >
         {FASES.map((f) => (
           <option key={f} value={f}>
@@ -74,7 +84,7 @@ export function Run() {
         id="objetivos"
         value={objetivosTexto}
         onChange={(e) => setObjetivosTexto(e.target.value)}
-        disabled={estado === "corriendo"}
+        disabled={estado === "corriendo" || confirmando}
       />
 
       {!confirmando && (

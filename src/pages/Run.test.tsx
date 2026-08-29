@@ -75,6 +75,30 @@ describe("Run", () => {
     expect(lista).toHaveTextContent("198.51.100.6");
   });
 
+  // El diálogo tiene que ser modal de verdad: `lanzar()` lee el estado
+  // VIVO de fase y objetivos, no aquel con el que se calculó el argv que
+  // se está enseñando. Si se pudieran editar con el diálogo abierto, el
+  // operador vería el argv de A y lanzaría B.
+  it("congela fase y objetivos mientras el diálogo de confirmación está abierto", async () => {
+    render(<Run />);
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+
+    await screen.findByRole("dialog");
+    expect(screen.getByLabelText(/objetivos/i)).toBeDisabled();
+    expect(screen.getByLabelText(/fase/i)).toBeDisabled();
+  });
+
+  it("vuelve a dejar editar tras cancelar la confirmación", async () => {
+    render(<Run />);
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /cancelar edición/i }));
+
+    expect(screen.getByLabelText(/objetivos/i)).toBeEnabled();
+    expect(screen.getByLabelText(/fase/i)).toBeEnabled();
+  });
+
   it("no abre el diálogo si la vista previa falla", async () => {
     despachar(() => Promise.reject("objetivo fuera de alcance: 203.0.113.9"));
     render(<Run />);
