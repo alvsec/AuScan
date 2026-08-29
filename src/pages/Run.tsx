@@ -21,6 +21,12 @@ export function Run() {
   // a pedirse. Confundirlos haría que un objetivo fuera de alcance
   // rechazado en la vista previa se leyera como un escaneo fallido.
   const [errorPrevisualizacion, setErrorPrevisualizacion] = useState<string | null>(null);
+  // `run_preview` cruza la frontera al backend y valida el alcance, lo
+  // que incluye resolución DNS: puede tardar. Sin esta bandera el botón
+  // seguía pulsable durante toda la ida y vuelta -- solo se sustituía por
+  // el diálogo DESPUÉS de que la promesa resolviera -- así que un
+  // operador impaciente encadenaba varias vistas previas en vuelo.
+  const [cargandoPrevisualizacion, setCargandoPrevisualizacion] = useState(false);
 
   const objetivos = objetivosTexto
     .split("\n")
@@ -33,6 +39,7 @@ export function Run() {
   // operador se entera antes de autorizar algo que no podría correr.
   const pedirConfirmacion = async () => {
     setErrorPrevisualizacion(null);
+    setCargandoPrevisualizacion(true);
     try {
       const lineas = await api.preview(fase, "nmap", objetivos);
       setPrevisualizacion(lineas);
@@ -40,6 +47,12 @@ export function Run() {
     } catch (e) {
       setErrorPrevisualizacion(mensaje(e));
       setConfirmando(false);
+    } finally {
+      // En `finally`, no al final del `try`: si la vista previa falla
+      // -- un objetivo fuera de alcance, el caso más frecuente -- el
+      // botón tiene que volver a estar pulsable para poder corregir el
+      // objetivo y reintentar.
+      setCargandoPrevisualizacion(false);
     }
   };
 
@@ -91,11 +104,13 @@ export function Run() {
         <button
           type="button"
           onClick={() => void pedirConfirmacion()}
-          disabled={estado === "corriendo" || objetivos.length === 0}
+          disabled={estado === "corriendo" || objetivos.length === 0 || cargandoPrevisualizacion}
         >
           {t("run.lanzarBoton")}
         </button>
       )}
+
+      {cargandoPrevisualizacion && <p>{t("run.previsualizando")}</p>}
 
       {errorPrevisualizacion && <p role="alert">{errorPrevisualizacion}</p>}
 

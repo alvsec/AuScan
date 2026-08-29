@@ -73,6 +73,7 @@
     "cancelarBoton": "Cancel editing",
     "lanzarBoton": "Launch",
     "cancelarEjecucionBoton": "Cancel execution",
+    "previsualizando": "Preparing confirmation…",
     "corriendo": "Running…",
     "sinLineas": "No output yet.",
     "recuento": "{{hosts}} hosts, {{servicios}} services, {{observaciones}} observations"

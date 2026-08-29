@@ -405,7 +405,18 @@ async fn run_start(
 ///
 /// Sin parámetro `privileged`, por lo mismo que `run_start`: el
 /// privilegio lo calcula el backend, nunca el frontend.
-#[tauri::command]
+///
+/// `command(async)` y no `command` a secas: el cuerpo sigue siendo
+/// síncrono, pero `planificar` valida el alcance y eso resuelve DNS de
+/// forma BLOQUEANTE (`SystemResolver`, dentro de `Scope::validate_target`).
+/// Un comando no-`async` lo despacha Tauri en el HILO PRINCIPAL, así que
+/// un servidor DNS lento congelaba la ventana entera -- no solo el botón
+/// -- durante todo el tiempo de espera. Con el atributo `(async)` el
+/// macro envuelve la llamada en una tarea del runtime asíncrono en vez de
+/// ejecutarla en línea sobre el hilo principal, que es lo mismo que
+/// `run_start` consigue con `tauri::async_runtime::spawn`, y sin tener
+/// que reescribir nada de dentro.
+#[tauri::command(async)]
 fn run_preview(
     state: State<AppState>,
     phase: String,

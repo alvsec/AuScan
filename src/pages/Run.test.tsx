@@ -99,6 +99,32 @@ describe("Run", () => {
     expect(screen.getByLabelText(/fase/i)).toBeEnabled();
   });
 
+  // `run_preview` valida el alcance en el backend, y eso resuelve DNS:
+  // la ida y vuelta puede tardar. Hasta que resuelve, `confirmando` sigue
+  // en false y el botón seguía ahí, pulsable.
+  it("deshabilita el botón de lanzar mientras la vista previa está en vuelo", async () => {
+    let resolver!: (lineas: string[]) => void;
+    despachar(
+      () =>
+        new Promise<string[]>((res) => {
+          resolver = res;
+        }),
+    );
+    render(<Run />);
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+
+    expect(screen.getByRole("button", { name: /lanzar/i })).toBeDisabled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    // Insistir no encadena una segunda vista previa en vuelo.
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    resolver(ARGV_PREVISTO);
+    expect(await screen.findByRole("dialog")).toHaveTextContent("198.51.100.5");
+  });
+
   it("no abre el diálogo si la vista previa falla", async () => {
     despachar(() => Promise.reject("objetivo fuera de alcance: 203.0.113.9"));
     render(<Run />);
