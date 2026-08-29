@@ -439,13 +439,18 @@ async fn run_start(
     // emitiendo la pareja de eventos que faltaba.
     tauri::async_runtime::spawn(async move {
         if let Err(error_union) = manejo.await {
-            // SOLO el pánico. Un `Err` de la fase llega como `Ok(Err(..))`
-            // y no pisa por aquí, así que no hay forma de emitir dos veces
-            // los mismos eventos.
+            // SOLO el pánico. El bloque spawneado no tiene expresión final
+            // -- su `Output` es `()`, no `Result` -- así que el `Err` de
+            // la fase se consume dentro de él y nunca llega a cruzar este
+            // `.await`; no hay forma de emitir dos veces los mismos
+            // eventos.
             if la_tarea_entro_en_panico(&error_union) {
-                // Sin `e.to_string()` que enseñar: el mensaje del pánico
-                // se lo queda tokio. Mejor una frase honesta que decir
-                // que la fase terminó y ya está.
+                // No se enseña el texto real del pánico a propósito, no
+                // porque tokio se lo quede: `JoinError::into_panic()` sí
+                // lo expone. Viene de un parser corriendo sobre datos no
+                // confiables, y ese payload no es algo que deba acabar en
+                // el `role="alert"` del operador. El hook de pánico por
+                // defecto ya lo imprime en stderr para diagnóstico.
                 let _ = app_para_panico.emit(
                     "run:error",
                     serde_json::json!({
