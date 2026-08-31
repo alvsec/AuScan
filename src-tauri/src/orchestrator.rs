@@ -734,7 +734,11 @@ mod tests {
 
         let bucle = tokio::spawn({
             let ruta = ruta.clone();
-            async move { crate::worker::ejecutar_bucle(ruta).await.unwrap() }
+            async move {
+                crate::worker::ejecutar_bucle(ruta, std::process::id())
+                    .await
+                    .unwrap()
+            }
         });
         for _ in 0..50 {
             if crate::privilege::leer_listo(&ruta).unwrap().is_some() {

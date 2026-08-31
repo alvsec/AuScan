@@ -472,6 +472,7 @@ async fn una_fase_elevada_numera_sus_ordenes_desde_uno_aunque_el_expediente_no_e
     let dir_control = tempfile::tempdir().unwrap();
     let bucle = tokio::spawn(auscan_lib::worker::ejecutar_bucle(
         dir_control.path().to_path_buf(),
+        std::process::id(),
     ));
     for _ in 0..50 {
         if auscan_lib::privilege::leer_listo(dir_control.path())

@@ -12,7 +12,7 @@ async fn trabajador_de_prueba(
     let manejo = tokio::spawn({
         let dir = dir.to_path_buf();
         async move {
-            ejecutar_bucle(dir).await.unwrap();
+            ejecutar_bucle(dir, std::process::id()).await.unwrap();
         }
     });
     for _ in 0..50 {

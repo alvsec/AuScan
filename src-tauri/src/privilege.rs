@@ -306,10 +306,15 @@ pub async fn iniciar_trabajador(dir_control: &Path) -> Result<TrabajadorActivo> 
     // texto libre del operador -- salen de `current_exe()` y de este
     // mismo proceso -- pero se citan lo mismo, por si acaso: es el
     // mismo principio que aplica la verja a los argv de un adaptador.
+    //
+    // El tercer argumento es el pid de ESTA app: el trabajador lo vigila
+    // para irse solo si la app desaparece (ver `worker::ejecutar_bucle`).
+    // Va sin citar porque es un número que produce este mismo proceso.
     let comando_interno = format!(
-        "{} {}",
+        "{} {} {}",
         citar_para_shell(&binario_trabajador.display().to_string()),
-        citar_para_shell(&dir_control.display().to_string())
+        citar_para_shell(&dir_control.display().to_string()),
+        std::process::id()
     );
     let script = format!(
         "do shell script {} with administrator privileges",

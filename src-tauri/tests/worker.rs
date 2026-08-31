@@ -11,7 +11,7 @@ fn dir_de_prueba() -> tempfile::TempDir {
 #[tokio::test]
 async fn escribe_listo_con_su_propio_estado_de_privilegio_antes_de_esperar_ordenes() {
     let dir = dir_de_prueba();
-    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf()));
+    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf(), std::process::id()));
 
     let listo = esperar_listo(dir.path()).await;
     // El test corre sin privilegios: el trabajador tiene que medir eso
@@ -25,7 +25,7 @@ async fn escribe_listo_con_su_propio_estado_de_privilegio_antes_de_esperar_orden
 #[tokio::test]
 async fn ejecuta_una_orden_y_escribe_su_salida_y_su_estado() {
     let dir = dir_de_prueba();
-    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf()));
+    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf(), std::process::id()));
     esperar_listo(dir.path()).await;
 
     let orden = Orden {
@@ -48,7 +48,7 @@ async fn ejecuta_una_orden_y_escribe_su_salida_y_su_estado() {
 #[tokio::test]
 async fn el_centinela_de_cancelar_mata_al_hijo_en_curso() {
     let dir = dir_de_prueba();
-    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf()));
+    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf(), std::process::id()));
     esperar_listo(dir.path()).await;
 
     let orden = Orden {
@@ -79,7 +79,7 @@ async fn el_centinela_de_cancelar_mata_al_hijo_en_curso() {
 #[tokio::test]
 async fn el_centinela_de_detener_para_el_bucle_entero() {
     let dir = dir_de_prueba();
-    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf()));
+    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf(), std::process::id()));
     esperar_listo(dir.path()).await;
 
     privilege::marcar_detener(dir.path()).unwrap();
@@ -99,7 +99,7 @@ async fn el_centinela_de_detener_para_el_bucle_entero() {
 #[tokio::test]
 async fn el_centinela_de_detener_corta_tambien_con_una_orden_en_vuelo() {
     let dir = dir_de_prueba();
-    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf()));
+    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf(), std::process::id()));
     esperar_listo(dir.path()).await;
 
     let orden = Orden {
@@ -126,6 +126,46 @@ async fn el_centinela_de_detener_corta_tambien_con_una_orden_en_vuelo() {
     assert!(
         privilege::leer_estado(dir.path(), 1).unwrap().is_some(),
         "quien esperaba esta invocación tiene que enterarse de que ya no llega nada"
+    );
+}
+
+/// El trabajador no tiene a nadie por encima: `do shell script ... with
+/// administrator privileges` no lo cuelga de la app, así que si la app
+/// se cierra a la fuerza o revienta con una fase elevada en marcha, aquí
+/// quedaba un proceso ROOT sondeando a 5 Hz para siempre un directorio
+/// con la salida cruda de escaneos de un cliente dentro -- y sin nadie
+/// que fuera a borrarlo nunca.
+///
+/// Con el pid de la app por parámetro, el trabajador lo vigila: si ya no
+/// está, recoge su propio directorio y se va.
+#[tokio::test]
+async fn sin_la_app_al_otro_lado_el_trabajador_recoge_su_directorio_y_se_va() {
+    // Un pid que seguro que ya no existe: se lanza un proceso, se
+    // espera a que termine (y a que se recoja) y se reutiliza su
+    // número.
+    let mut efimero = tokio::process::Command::new("/usr/bin/true")
+        .spawn()
+        .unwrap();
+    let pid_muerto = efimero.id().expect("acaba de lanzarse");
+    efimero.wait().await.unwrap();
+
+    let dir = dir_de_prueba();
+    let dir_control = dir.path().join("control");
+    std::fs::create_dir_all(&dir_control).unwrap();
+    // Un resto de un escaneo real dentro: es exactamente lo que no
+    // puede quedarse ahí sin dueño.
+    std::fs::write(dir_control.join("0001.stdout"), b"198.51.100.5 open\n").unwrap();
+
+    let manejo = tokio::spawn(ejecutar_bucle(dir_control.clone(), pid_muerto));
+    tokio::time::timeout(Duration::from_secs(10), manejo)
+        .await
+        .expect("el trabajador tiene que irse solo si la app que lo lanzó ya no está")
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        !dir_control.exists(),
+        "sin la app no queda nadie que recoja el directorio: lo recoge él"
     );
 }
 
