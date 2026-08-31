@@ -201,6 +201,52 @@ impl ToolAdapter for AdaptadorPorObjetivo {
     }
 }
 
+/// Como `AdaptadorPorObjetivo` -- una invocación por objetivo, que es la
+/// forma real de la fase Services --, pero con un script que TERMINA
+/// solo: escupe una línea y sale. Lo usa el test de la numeración del
+/// protocolo elevado, que necesita varias invocaciones seguidas
+/// completándose de verdad contra el mismo trabajador.
+struct AdaptadorEcoPorObjetivo;
+
+impl ToolAdapter for AdaptadorEcoPorObjetivo {
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            id: "eco-por-objetivo",
+            phases: &[Phase::Services],
+            ..AdaptadorDePrueba.descriptor()
+        }
+    }
+
+    fn version_argv(&self) -> Vec<String> {
+        AdaptadorDePrueba.version_argv()
+    }
+
+    fn parse_version(&self, stdout: &str) -> Result<Version> {
+        AdaptadorDePrueba.parse_version(stdout)
+    }
+
+    fn plan(&self, ctx: &PlanContext) -> Result<Vec<Invocation>> {
+        Ok(ctx
+            .targets
+            .iter()
+            .map(|t| Invocation {
+                phase: ctx.phase,
+                argv: vec![BANDERA.to_string(), format!("echo eco-{}", t.ip())],
+                targets: vec![*t],
+                needs_privilege: false,
+                raw_from: RawSource::Stdout,
+                progress_from: ProgressSource::None,
+                stdin: None,
+                timeout: Duration::from_secs(10),
+            })
+            .collect())
+    }
+
+    fn parse(&self, raw: &[u8], ctx: &ParseContext) -> Result<Normalized> {
+        AdaptadorDePrueba.parse(raw, ctx)
+    }
+}
+
 /// Directorio de marcadores dentro del tempdir del test, ya creado.
 fn dir_marcadores(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let d = dir.path().join("marcadores");
@@ -374,6 +420,150 @@ async fn una_fase_sin_elevar_no_intenta_arrancar_ningun_trabajador() {
         auscan_lib::preflight::running_privileged(),
         "sin trabajador, el privilegio archivado es el REAL del proceso"
     );
+}
+
+/// El número con el que se numeran las órdenes del trabajador NO es el
+/// `seq` de `tool_run`.
+///
+/// El trabajador cuenta 1, 2, 3... dentro de su propio directorio de
+/// control, que nace y muere con la fase, y atiende en orden estricto:
+/// si la primera orden que ve escrita no es la `0001`, se queda
+/// sondeando un fichero que nadie va a escribir nunca. El `seq` que el
+/// orquestador le pasaba es `runs::siguiente_seq`, que es
+/// ENGAGEMENT-global (`MAX(seq)+1` sobre todo `tool_run`): funcionaba
+/// solo mientras el expediente no tuviera ninguna ejecución previa, y
+/// colgaba la fase entera a partir de la segunda.
+///
+/// Por eso el test SIEMBRA una ejecución previa: sin ella, `seq` vale 1
+/// y el bug no se manifiesta -- que es exactamente por lo que ninguna
+/// prueba lo vio. Y por eso comprueba las dos mitades: que el protocolo
+/// numera desde 1, y que la base y los ficheros crudos siguen usando el
+/// `seq` global de siempre (5 y 6), que es lo que sostiene la
+/// trazabilidad del expediente.
+#[tokio::test]
+async fn una_fase_elevada_numera_sus_ordenes_desde_uno_aunque_el_expediente_no_este_en_uno() {
+    let (dir, state, id) = estado_de_prueba();
+    {
+        let guard = state.open.lock().unwrap();
+        let conn = &guard.as_ref().unwrap().conn;
+        auscan_lib::runs::crear_tool_run(
+            conn,
+            4,
+            "prueba",
+            "1.0.0",
+            "/bin/sh",
+            "discovery",
+            "[]",
+            false,
+            "[]",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(
+            auscan_lib::runs::siguiente_seq(conn).unwrap(),
+            5,
+            "el expediente tiene que llegar a la fase con el seq global lejos de 1"
+        );
+    }
+
+    // Un trabajador de verdad (el mismo bucle que corre como root en
+    // producción), arrancado a mano y sin privilegios: lo que se prueba
+    // es el protocolo, que no depende de ser root.
+    let dir_control = tempfile::tempdir().unwrap();
+    let bucle = tokio::spawn(auscan_lib::worker::ejecutar_bucle(
+        dir_control.path().to_path_buf(),
+    ));
+    for _ in 0..50 {
+        if auscan_lib::privilege::leer_listo(dir_control.path())
+            .unwrap()
+            .is_some()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let trabajador = Some(auscan_lib::privilege::TrabajadorActivo::para_pruebas(
+        dir_control.path().to_path_buf(),
+    ));
+
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(AdaptadorEcoPorObjetivo)];
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        auscan_lib::orchestrator::ejecutar_fase_con_trabajador_para_pruebas(
+            &state,
+            &registro,
+            Phase::Services,
+            "eco-por-objetivo",
+            &["198.51.100.5".to_string(), "198.51.100.6".to_string()],
+            &trabajador,
+            &PhaseOptions::default(),
+            CancellationToken::new(),
+            |_| {},
+        ),
+    )
+    .await
+    .expect("la fase elevada no puede colgarse esperando a un trabajador que sí está vivo")
+    .unwrap();
+
+    // 1. El trabajador atendió DE VERDAD las dos órdenes, numeradas
+    //    desde 1 en su propio directorio.
+    for n in [1, 2] {
+        assert!(
+            auscan_lib::privilege::leer_estado(dir_control.path(), n)
+                .unwrap()
+                .is_some(),
+            "el trabajador tenía que haber procesado la orden {n:04}"
+        );
+    }
+    assert!(
+        !dir_control.path().join("0005.orden.json").exists(),
+        "el seq del expediente no puede acabar en el nombre de una orden"
+    );
+
+    // 2. Y la base y los crudos siguen con el seq ENGAGEMENT-global de
+    //    siempre: es lo que el expediente ya archivado usa para
+    //    referirse a cada ejecución.
+    let guard = state.open.lock().unwrap();
+    let conn = &guard.as_ref().unwrap().conn;
+    let seqs: Vec<i64> = conn
+        .prepare("SELECT seq FROM tool_run WHERE tool = 'eco-por-objetivo' ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(seqs, vec![5, 6]);
+    for (seq, ip) in [(5, "198.51.100.5"), (6, "198.51.100.6")] {
+        let (status, raw_path): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, raw_path FROM tool_run WHERE seq = ?1",
+                [seq],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "ok",
+            "la invocación de {ip} tenía que correr entera"
+        );
+        assert_eq!(
+            raw_path,
+            Some(format!("raw/{seq:04}-eco-por-objetivo-services.xml"))
+        );
+        assert!(auscan_lib::paths::engagement_dir(dir.path(), &id)
+            .unwrap()
+            .join(raw_path.unwrap())
+            .is_file());
+    }
+    drop(guard);
+
+    auscan_lib::privilege::detener_trabajador(trabajador.unwrap())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), bucle)
+        .await
+        .expect("el trabajador tenía que salir con el centinela de detener")
+        .unwrap()
+        .unwrap();
 }
 
 /// El otro lado de la Global Constraint sobre `elevar`: pedir elevación

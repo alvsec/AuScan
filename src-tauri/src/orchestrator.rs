@@ -305,6 +305,45 @@ fn uuid_simple() -> String {
     format!("{nanos:x}-{}", std::process::id())
 }
 
+/// Solo para tests: el cuerpo de la fase contra un trabajador que el
+/// test ya arrancó por su cuenta (`TrabajadorActivo::para_pruebas`,
+/// sin `osascript` ni root de verdad).
+///
+/// Es el único modo de ejercitar el bucle REAL de invocaciones por el
+/// camino privilegiado -- el sitio donde vive la numeración del
+/// protocolo -- sin un diálogo de autorización de por medio. Lo que
+/// queda fuera es solo el arranque y la parada del trabajador, que el
+/// test maneja él mismo (y que ya cubren `iniciar_trabajador` y
+/// `cerrar_fase` con sus propias pruebas).
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn ejecutar_fase_con_trabajador_para_pruebas(
+    state: &AppState,
+    registro: &[Box<dyn ToolAdapter>],
+    fase: Phase,
+    tool_id: &str,
+    objetivos_crudos: &[String],
+    trabajador: &Option<crate::privilege::TrabajadorActivo>,
+    opciones: &PhaseOptions,
+    cancelar: CancellationToken,
+    mut on_suceso: impl FnMut(SucesoRun) + Send + 'static,
+) -> Result<()> {
+    let privilegio_disponible = trabajador.is_some() || preflight::running_privileged();
+    ejecutar_fase_interna(
+        state,
+        registro,
+        fase,
+        tool_id,
+        objetivos_crudos,
+        privilegio_disponible,
+        trabajador,
+        opciones,
+        cancelar,
+        &mut on_suceso,
+    )
+    .await
+}
+
 /// El cuerpo de la fase, ya con el privilegio decidido y el trabajador
 /// (si lo hay) en marcha. Separado de `ejecutar_fase` para que el
 /// arranque y la parada del trabajador queden en un solo sitio, con el
@@ -337,6 +376,27 @@ async fn ejecutar_fase_interna(
     let mut total_servicios = 0usize;
     let mut total_observaciones = 0usize;
 
+    // El contador del PROTOCOLO con el trabajador, que no tiene nada que
+    // ver con el `seq` de `tool_run`.
+    //
+    // El trabajador numera las órdenes 1, 2, 3... dentro de su propio
+    // directorio de control, que nace y muere con esta fase, y las
+    // atiende en orden estricto: si la primera orden que se le escribe
+    // no es la `0001`, se queda sondeando un fichero que nadie va a
+    // escribir jamás. El `seq` de `runs::siguiente_seq` es
+    // ENGAGEMENT-global (`MAX(seq)+1` sobre todo `tool_run`), así que
+    // pasárselo al trabajador funcionaba solo por casualidad: mientras
+    // el expediente no tuviera ninguna ejecución previa. La segunda fase
+    // elevada de cualquier expediente colgaba hasta el plazo.
+    //
+    // Solo lo consume una invocación PRIVILEGIADA: sin trabajador no se
+    // escribe ninguna orden, así que gastar un número dejaría un hueco
+    // que el trabajador esperaría para siempre. (Que `trabajador` sea el
+    // mismo `Option` para toda la fase hace que en la práctica sea todo
+    // o nada, pero la condición se escribe donde de verdad está el
+    // criterio: se numera lo que se le pide al trabajador.)
+    let mut seq_trabajador: i64 = 0;
+
     for invocacion in invocaciones {
         // Cancelar una fase tiene que PARARLA, no solo hacer que cada
         // invocación restante nazca muerta. Sin este corte, una fase
@@ -350,6 +410,9 @@ async fn ejecutar_fase_interna(
         if cancelar.is_cancelled() {
             break;
         }
+        if trabajador.is_some() {
+            seq_trabajador += 1;
+        }
         let (hosts, servicios, observaciones) = ejecutar_invocacion(
             state,
             registro,
@@ -358,6 +421,7 @@ async fn ejecutar_fase_interna(
             invocacion,
             privilegio_disponible,
             trabajador,
+            seq_trabajador,
             cancelar.clone(),
             on_suceso,
         )
@@ -388,6 +452,7 @@ async fn ejecutar_invocacion(
     invocacion: Invocation,
     privilegio_disponible: bool,
     trabajador: &Option<crate::privilege::TrabajadorActivo>,
+    seq_trabajador: i64,
     cancelar: CancellationToken,
     on_suceso: &mut (impl FnMut(SucesoRun) + Send + 'static),
 ) -> Result<(usize, usize, usize)> {
@@ -506,7 +571,12 @@ async fn ejecutar_invocacion(
     let resultado = if let Some(t) = trabajador {
         crate::privilege::ejecutar_privilegiado(
             t,
-            seq,
+            // El número del PROTOCOLO (fase-local, desde 1), nunca el
+            // `seq` de `tool_run` (engagement-global): el trabajador
+            // atiende las órdenes en orden estricto desde la `0001` de
+            // su propio directorio. Ver `seq_trabajador` en
+            // `ejecutar_fase_interna`.
+            seq_trabajador,
             &binario,
             &invocacion.argv,
             timeout,
