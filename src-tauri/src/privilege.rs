@@ -284,6 +284,10 @@ pub async fn iniciar_trabajador(dir_control: &Path) -> Result<TrabajadorActivo> 
 /// saber desde aquí que el trabajador ya terminó -- y deja esa limpieza
 /// al `tempfile::TempDir` propio del test, que borra solo al salir de
 /// scope.
+// `mut` solo hace falta en la rama macOS (`.take()` sobre `osascript`);
+// en el resto de plataformas ese campo no existe y el parámetro no se
+// muta nunca, lo que dispararía `unused_mut` bajo `-D warnings`.
+#[allow(unused_mut)]
 pub async fn detener_trabajador(mut trabajador: TrabajadorActivo) -> Result<()> {
     marcar_detener(&trabajador.dir_control)?;
     #[cfg(target_os = "macos")]
