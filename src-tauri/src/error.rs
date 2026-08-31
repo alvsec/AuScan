@@ -87,6 +87,15 @@ pub enum AppError {
     #[error("protocolo de elevación corrupto: {0}")]
     ProtocoloElevacion(String),
 
+    /// El trabajador elevado dejó de contestar A MITAD de una fase, con
+    /// la elevación ya conseguida. No es `ElevationFailed` (eso es el
+    /// ARRANQUE: el diálogo rechazado, el plazo vencido, el trabajador
+    /// que no es root) ni `ProtocoloElevacion` (eso es un fichero del
+    /// protocolo corrupto): aquí el protocolo está intacto y lo que
+    /// falla es que al otro lado ya no responde nadie.
+    #[error("el trabajador elevado dejó de responder: {0}")]
+    TrabajadorSinRespuesta(String),
+
     #[error("elevación fallida: {0}")]
     ElevationFailed(String),
 

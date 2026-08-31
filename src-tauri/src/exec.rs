@@ -17,6 +17,15 @@ use crate::adapters::{Invocation, ToolDescriptor};
 use crate::error::{AppError, Result};
 use crate::scope::ScopedTarget;
 
+/// Lo que `matar` espera entre el `SIGTERM` amable y el `SIGKILL` que no
+/// admite discusión.
+///
+/// Es una constante con nombre, y no un `3` suelto dentro de `matar`,
+/// porque el trabajador elevado reutiliza esta misma función para matar
+/// a SU hijo: quien espera al otro lado (`privilege::ejecutar_privilegiado`)
+/// necesita construir su propio plazo A PARTIR de este, no adivinarlo.
+pub(crate) const PLAZO_GRACIA_MATAR: Duration = Duration::from_secs(3);
+
 /// De qué flujo salió una línea capturada durante una ejecución.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineaOrigen {
@@ -292,7 +301,7 @@ pub(crate) async fn matar(hijo: &mut tokio::process::Child, pid: Option<u32>) {
     unsafe {
         libc::killpg(pid as i32, libc::SIGTERM);
     }
-    if tokio::time::timeout(Duration::from_secs(3), hijo.wait())
+    if tokio::time::timeout(PLAZO_GRACIA_MATAR, hijo.wait())
         .await
         .is_err()
     {

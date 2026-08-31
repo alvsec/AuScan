@@ -161,6 +161,26 @@ use crate::exec::{AcumuladorLineas, Linea, LineaOrigen, ResultadoEjecucion};
 
 const INTERVALO_SONDEO_LECTURA: Duration = Duration::from_millis(200);
 
+/// Cuánto se espera COMO MUCHO a que el trabajador confirme por escrito
+/// que ya mató al hijo, después de marcarle el centinela de cancelar.
+///
+/// Se construye a partir del plazo de gracia de `exec::matar` -- que es
+/// literalmente la función que el trabajador usa para matar -- más un
+/// margen: el trabajador tarda como mucho un sondeo (200 ms) en ver el
+/// centinela, luego el `SIGTERM`, luego la gracia entera, luego el
+/// `SIGKILL` y el `wait`, y solo entonces escribe el estado. Cualquier
+/// espera más larga que eso ya no es "el hijo está tardando en morir",
+/// es que al otro lado no queda nadie.
+///
+/// Sin este límite, esta espera no tenía ninguno: un trabajador muerto,
+/// un desincronizado del protocolo o un fichero corrupto colgaban para
+/// siempre la tarea de la fase entera. Y colgar esa tarea no es solo
+/// perder la fase -- el guard de `lib.rs` que protege `ejecucion_activa`
+/// no se suelta nunca, así que `engagement_open` y `engagement_purge`
+/// (el botón de higiene de datos) quedan rechazando para siempre.
+const PLAZO_CONFIRMACION_CANCELACION: Duration =
+    Duration::from_secs(crate::exec::PLAZO_GRACIA_MATAR.as_secs() + 5);
+
 /// Un trabajador elevado vivo, con su propio directorio de control.
 /// `detener_trabajador` es lo único que lo cierra correctamente --
 /// dejar caer este valor sin llamarla deja el proceso root esperando
@@ -390,6 +410,37 @@ pub async fn ejecutar_privilegiado(
     argv: &[String],
     timeout: Duration,
     cancelar: CancellationToken,
+    on_linea: impl FnMut(Linea),
+) -> Result<ResultadoEjecucion> {
+    ejecutar_privilegiado_con_plazo(
+        trabajador,
+        seq,
+        binary_path,
+        argv,
+        timeout,
+        PLAZO_CONFIRMACION_CANCELACION,
+        cancelar,
+        on_linea,
+    )
+    .await
+}
+
+/// El cuerpo de verdad, con el plazo de confirmación por parámetro.
+///
+/// Que sea inyectable es lo mismo que ya se hizo con el plazo de
+/// arranque en `esperar_trabajador_listo`, y por el mismo motivo: probar
+/// el vencimiento de una espera de ocho segundos cuesta ocho segundos de
+/// test si el número está incrustado, y trescientos milisegundos si
+/// entra por la puerta.
+#[allow(clippy::too_many_arguments)]
+async fn ejecutar_privilegiado_con_plazo(
+    trabajador: &TrabajadorActivo,
+    seq: i64,
+    binary_path: &Path,
+    argv: &[String],
+    timeout: Duration,
+    plazo_confirmacion: Duration,
+    cancelar: CancellationToken,
     mut on_linea: impl FnMut(Linea),
 ) -> Result<ResultadoEjecucion> {
     if cancelar.is_cancelled() {
@@ -467,10 +518,20 @@ pub async fn ejecutar_privilegiado(
             marcar_cancelar(dir_control)?;
             // El trabajador es quien mata a su hijo -- esta función
             // solo espera a que confirme que ya lo hizo, con el mismo
-            // sondeo del estado que el camino normal.
+            // sondeo del estado que el camino normal. Pero con un
+            // LÍMITE: nada garantiza que al otro lado siga habiendo un
+            // trabajador vivo, y una espera sin plazo aquí cuelga la
+            // tarea de la fase entera (ver `PLAZO_CONFIRMACION_CANCELACION`).
+            let limite = tokio::time::Instant::now() + plazo_confirmacion;
             loop {
                 if leer_estado(dir_control, seq)?.is_some() {
                     break;
+                }
+                if tokio::time::Instant::now() >= limite {
+                    return Err(AppError::TrabajadorSinRespuesta(format!(
+                        "no confirmó la muerte de la invocación {seq} en {} s",
+                        plazo_confirmacion.as_secs_f32()
+                    )));
                 }
                 tokio::time::sleep(INTERVALO_SONDEO_LECTURA).await;
             }
@@ -568,6 +629,49 @@ mod tests {
         marcar_detener(dir.path()).unwrap();
         assert!(hay_cancelar(dir.path()));
         assert!(hay_detener(dir.path()));
+    }
+
+    /// La espera de la confirmación tras marcar el centinela no tenía
+    /// plazo ninguno: si al otro lado no queda un trabajador que
+    /// conteste -- porque murió, porque el protocolo se desincronizó, o
+    /// por cualquier otra razón --, esto colgaba para siempre la tarea
+    /// de la fase, y con ella el guard de `ejecucion_activa`: ni
+    /// `engagement_open` ni `engagement_purge` volvían a aceptarse
+    /// nunca. Aquí no hay ningún `ejecutar_bucle` corriendo contra el
+    /// directorio, así que el centinela no lo lee nadie.
+    #[tokio::test]
+    async fn una_cancelacion_sin_nadie_al_otro_lado_falla_en_vez_de_colgarse() {
+        let dir = tempfile::tempdir().unwrap();
+        let trabajador = TrabajadorActivo::para_pruebas(dir.path().to_path_buf());
+
+        let inicio = tokio::time::Instant::now();
+        let resultado = ejecutar_privilegiado_con_plazo(
+            &trabajador,
+            1,
+            Path::new("/bin/echo"),
+            &["hola".to_string()],
+            // El plazo de la invocación vence enseguida: es lo que
+            // marca el centinela sin que nadie haya cancelado nada.
+            Duration::from_millis(100),
+            // Y la confirmación no llega nunca, porque no hay nadie.
+            Duration::from_millis(300),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await;
+
+        assert!(
+            matches!(resultado, Err(AppError::TrabajadorSinRespuesta(_))),
+            "se esperaba TrabajadorSinRespuesta, llegó {resultado:?}"
+        );
+        assert!(
+            inicio.elapsed() < Duration::from_secs(5),
+            "la espera tiene que estar acotada, no rendirse cuando alguien la mate"
+        );
+        // Y el plazo de verdad -- el que usa `ejecutar_privilegiado` --
+        // se construye por encima de la gracia de `exec::matar`, que es
+        // justo lo que el trabajador tarda en el peor caso legítimo.
+        assert!(PLAZO_CONFIRMACION_CANCELACION > crate::exec::PLAZO_GRACIA_MATAR);
     }
 
     /// Un doble del `osascript` que sigue con el diálogo abierto: un
