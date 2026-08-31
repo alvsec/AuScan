@@ -90,6 +90,45 @@ async fn el_centinela_de_detener_para_el_bucle_entero() {
     );
 }
 
+/// El centinela de detener tiene que cortar TAMBIÉN con una orden en
+/// vuelo. Antes solo se miraba entre orden y orden: si el cuerpo de la
+/// fase salía por un camino que no marca el de cancelar,
+/// `detener_trabajador` se quedaba esperando a que terminara el escaneo
+/// en curso -- que en una fase de verdad son minutos u horas -- antes de
+/// que el bucle llegara siquiera a mirar su centinela.
+#[tokio::test]
+async fn el_centinela_de_detener_corta_tambien_con_una_orden_en_vuelo() {
+    let dir = dir_de_prueba();
+    let manejo = tokio::spawn(ejecutar_bucle(dir.path().to_path_buf()));
+    esperar_listo(dir.path()).await;
+
+    let orden = Orden {
+        binario: PathBuf::from("/bin/sleep"),
+        argv: vec!["30".to_string()],
+        ruta_stdout: privilege::ruta_stdout(dir.path(), 1),
+        ruta_stderr: privilege::ruta_stderr(dir.path(), 1),
+    };
+    privilege::escribir_orden(dir.path(), 1, &orden).unwrap();
+
+    // Con el hijo ya corriendo de verdad, no en carrera con su `spawn`.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let inicio = tokio::time::Instant::now();
+    privilege::marcar_detener(dir.path()).unwrap();
+
+    tokio::time::timeout(Duration::from_secs(10), manejo)
+        .await
+        .expect("el bucle tiene que salir aunque haya una orden en vuelo")
+        .unwrap()
+        .unwrap();
+    // `sleep 30` no termina solo en menos de 30 s: salir antes solo
+    // puede significar que el centinela mató al hijo.
+    assert!(inicio.elapsed() < Duration::from_secs(10));
+    assert!(
+        privilege::leer_estado(dir.path(), 1).unwrap().is_some(),
+        "quien esperaba esta invocación tiene que enterarse de que ya no llega nada"
+    );
+}
+
 async fn esperar_listo(dir: &Path) -> privilege::Listo {
     for _ in 0..50 {
         if let Some(l) = privilege::leer_listo(dir).unwrap() {

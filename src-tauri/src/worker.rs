@@ -37,10 +37,13 @@ pub async fn ejecutar_bucle(dir_control: PathBuf) -> Result<()> {
             return Ok(());
         }
         match privilege::leer_orden(&dir_control, seq)? {
-            Some(orden) => {
-                procesar_orden(&dir_control, seq, &orden).await?;
-                seq += 1;
-            }
+            Some(orden) => match procesar_orden(&dir_control, seq, &orden).await? {
+                FinDeOrden::Siguiente => seq += 1,
+                // Apareció el centinela de detener con la orden en
+                // vuelo: no se vuelve a esperar nada, la app está
+                // cerrando este trabajador.
+                FinDeOrden::Detener => return Ok(()),
+            },
             None => {
                 tokio::time::sleep(INTERVALO_SONDEO).await;
             }
@@ -48,7 +51,18 @@ pub async fn ejecutar_bucle(dir_control: PathBuf) -> Result<()> {
     }
 }
 
-async fn procesar_orden(dir_control: &Path, seq: i64, orden: &Orden) -> Result<()> {
+/// Cómo terminó una orden, visto desde el bucle.
+enum FinDeOrden {
+    /// La orden terminó -- bien, mal, o matada por el centinela de
+    /// cancelar --: toca esperar la siguiente.
+    Siguiente,
+    /// Apareció el centinela de DETENER con el hijo todavía corriendo.
+    /// El hijo ya está muerto y el bucle entero se acaba: no hay
+    /// "siguiente orden" que esperar.
+    Detener,
+}
+
+async fn procesar_orden(dir_control: &Path, seq: i64, orden: &Orden) -> Result<FinDeOrden> {
     let stdout_f = std::fs::File::create(&orden.ruta_stdout).map_err(AppError::Io)?;
     let stderr_f = std::fs::File::create(&orden.ruta_stderr).map_err(AppError::Io)?;
 
@@ -64,6 +78,7 @@ async fn procesar_orden(dir_control: &Path, seq: i64, orden: &Orden) -> Result<(
     let mut hijo = comando.spawn().map_err(AppError::Io)?;
     let pid = hijo.id();
 
+    let mut fin = FinDeOrden::Siguiente;
     let exit_code = loop {
         if let Some(estado) = hijo.try_wait().map_err(AppError::Io)? {
             break estado.code();
@@ -72,8 +87,23 @@ async fn procesar_orden(dir_control: &Path, seq: i64, orden: &Orden) -> Result<(
             matar(&mut hijo, pid).await;
             break None;
         }
+        // El de detener también, y en el MISMO sondeo. Antes solo se
+        // miraba entre orden y orden: si el cuerpo de la fase se iba por
+        // un camino que no marca el de cancelar, `detener_trabajador` se
+        // quedaba esperando a que terminase un escaneo entero (que
+        // pueden ser minutos u horas) antes de que este bucle llegara
+        // siquiera a mirar su centinela.
+        if privilege::hay_detener(dir_control) {
+            matar(&mut hijo, pid).await;
+            fin = FinDeOrden::Detener;
+            break None;
+        }
         tokio::time::sleep(INTERVALO_SONDEO).await;
     };
 
-    privilege::escribir_estado(dir_control, seq, &Estado { exit_code })
+    // El estado se escribe igual en los tres finales, detener incluido:
+    // quien esté esperando esta invocación al otro lado tiene derecho a
+    // enterarse de que ya no va a llegar nada más.
+    privilege::escribir_estado(dir_control, seq, &Estado { exit_code })?;
+    Ok(fin)
 }
