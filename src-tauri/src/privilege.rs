@@ -242,26 +242,95 @@ pub async fn iniciar_trabajador(dir_control: &Path) -> Result<TrabajadorActivo> 
         .spawn()
         .map_err(AppError::Io)?;
 
-    let plazo = tokio::time::Instant::now() + PLAZO_ARRANQUE;
-    loop {
-        if let Some(listo) = leer_listo(dir_control)? {
-            if !listo.es_root {
-                return Err(AppError::ElevationFailed(
-                    "el trabajador arrancó pero no es root".to_string(),
-                ));
+    esperar_trabajador_listo(osascript, dir_control, PLAZO_ARRANQUE).await
+}
+
+/// Espera a que el trabajador recién lanzado confirme por escrito que es
+/// root, y construye con él el `TrabajadorActivo`. Si no llega a
+/// confirmarlo -- porque dice no serlo, porque vence el plazo, o porque
+/// el propio `listo.json` no se deja leer --, LIMPIA lo que el arranque
+/// ya había dejado montado antes de devolver el error.
+///
+/// Esa limpieza es justo la razón de que esto sea una función aparte,
+/// con el hijo de `osascript` movido dentro y el plazo por parámetro:
+/// todos los caminos de error salen por el mismo sitio (no hay forma de
+/// añadir uno nuevo que se salte la limpieza sin verlo), y un plazo
+/// inyectable deja probar el vencimiento en milisegundos en vez de en
+/// los dos minutos de verdad.
+#[cfg(target_os = "macos")]
+async fn esperar_trabajador_listo(
+    mut osascript: tokio::process::Child,
+    dir_control: &Path,
+    plazo_total: Duration,
+) -> Result<TrabajadorActivo> {
+    let plazo = tokio::time::Instant::now() + plazo_total;
+    let fallo = loop {
+        match leer_listo(dir_control) {
+            Ok(Some(listo)) if listo.es_root => {
+                return Ok(TrabajadorActivo {
+                    dir_control: dir_control.to_path_buf(),
+                    osascript: Some(osascript),
+                })
             }
-            return Ok(TrabajadorActivo {
-                dir_control: dir_control.to_path_buf(),
-                osascript: Some(osascript),
-            });
+            // Arrancó, pero no es root: no hay modo "casi elevado" (ver
+            // la Global Constraint sobre `elevar`).
+            Ok(Some(_)) => {
+                break AppError::ElevationFailed(
+                    "el trabajador arrancó pero no es root".to_string(),
+                )
+            }
+            Ok(None) => {}
+            // `listo.json` a medio escribir o corrupto. No estaba
+            // contemplado como camino de salida, pero lo es desde que
+            // `leer_listo` puede devolver `ProtocoloElevacion`: sale por
+            // aquí para que también pase por la limpieza.
+            Err(e) => break e,
         }
         if tokio::time::Instant::now() >= plazo {
-            return Err(AppError::ElevationFailed(
+            break AppError::ElevationFailed(
                 "el operador no autorizó la elevación a tiempo".to_string(),
-            ));
+            );
         }
         tokio::time::sleep(INTERVALO_SONDEO_LECTURA).await;
-    }
+    };
+
+    abortar_arranque(&mut osascript, dir_control).await;
+    Err(fallo)
+}
+
+/// Deshace un arranque que no llegó a buen puerto: mata el `osascript`
+/// ya lanzado y borra el directorio de control que `iniciar_trabajador`
+/// había creado.
+///
+/// Se mata EXPLÍCITAMENTE, sin confiar en `kill_on_drop`: ese solo
+/// dispara cuando el valor se destruye, y aquí hace falta que el diálogo
+/// de autorización desaparezca ya, antes de devolver el error. Lo que se
+/// evita es el peor final posible de esta función: que el operador
+/// autorice el diálogo TARDE, después de que el arranque se haya rendido
+/// por plazo vencido. `do shell script` lanzaría entonces un
+/// `privileged-worker` root de verdad contra un directorio de control
+/// cuyo único dueño ya lo soltó -- un proceso root sondeando para
+/// siempre un `detener` que nadie va a escribir nunca, porque en la
+/// aplicación ya no queda nadie que sepa que ese directorio existió.
+///
+/// Los dos errores se ignoran a propósito, con el mismo criterio con el
+/// que `detener_trabajador` ignora el suyo: esto es limpieza de mejor
+/// esfuerzo en un camino que YA está devolviendo un error, y el que el
+/// operador necesita leer es el original ("no autorizó a tiempo"), no un
+/// fallo al recoger los restos. `kill()` en concreto falla si el proceso
+/// ya había salido por su cuenta, que aquí es un final normal.
+///
+/// Límite conocido: matar `osascript` no alcanza a un trabajador que YA
+/// hubiera arrancado (el comando elevado no cuelga de `osascript`, sino
+/// del trampolín de autorización del sistema). Eso solo puede pasar por
+/// el camino de "arrancó pero no es root", que por construcción deja un
+/// proceso SIN privilegios; el camino del plazo vencido -- el único en
+/// que podría haber root de por medio -- es justo el que esta función
+/// corta antes de que nada llegue a arrancar.
+#[cfg(target_os = "macos")]
+async fn abortar_arranque(osascript: &mut tokio::process::Child, dir_control: &Path) {
+    let _ = osascript.kill().await;
+    let _ = std::fs::remove_dir_all(dir_control);
 }
 
 /// Para el trabajador y limpia su directorio de control. Marca el
@@ -499,6 +568,97 @@ mod tests {
         marcar_detener(dir.path()).unwrap();
         assert!(hay_cancelar(dir.path()));
         assert!(hay_detener(dir.path()));
+    }
+
+    /// Un doble del `osascript` que sigue con el diálogo abierto: un
+    /// proceso que no termina solo, para que "sigue vivo al volver" sea
+    /// una afirmación con sentido. Devuelve el hijo y su pid.
+    #[cfg(target_os = "macos")]
+    fn osascript_de_mentira() -> (tokio::process::Child, i32) {
+        let hijo = tokio::process::Command::new("/bin/sleep")
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = hijo.id().expect("el hijo acaba de lanzarse") as i32;
+        (hijo, pid)
+    }
+
+    /// ¿Queda algún proceso con ese pid? `kill(pid, 0)` no envía señal
+    /// ninguna, solo comprueba existencia. Como `Child::kill()` de tokio
+    /// además cosecha al hijo, tras la limpieza el pid está libre.
+    #[cfg(target_os = "macos")]
+    fn sigue_vivo(pid: i32) -> bool {
+        // SAFETY: `kill` con señal 0 no tiene más precondición que un
+        // pid válido; no toca memoria ni envía nada.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// Bug del arranque a medias, camino 1: el trabajador contesta que
+    /// NO es root. Antes se devolvía el error a secas, dejando atrás el
+    /// `osascript` ya lanzado y el directorio de control creado por el
+    /// propio arranque.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn un_arranque_que_no_llega_a_root_mata_el_osascript_y_borra_el_directorio() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_control = dir.path().join("control");
+        std::fs::create_dir_all(&dir_control).unwrap();
+        escribir_listo(&dir_control, &Listo { es_root: false }).unwrap();
+
+        let (hijo, pid) = osascript_de_mentira();
+        assert!(sigue_vivo(pid));
+
+        // `let ... else` en vez de `expect_err`: el `Ok` lleva un
+        // `TrabajadorActivo`, que no es `Debug` a propósito (dentro hay un
+        // `Child`).
+        let Err(error) =
+            esperar_trabajador_listo(hijo, &dir_control, Duration::from_secs(30)).await
+        else {
+            panic!("un trabajador que no es root no puede dar un TrabajadorActivo");
+        };
+
+        assert!(matches!(error, AppError::ElevationFailed(_)));
+        assert!(
+            !sigue_vivo(pid),
+            "el osascript ya lanzado tiene que morir antes de volver, no \
+             'cuando Rust destruya el valor'"
+        );
+        assert!(
+            !dir_control.exists(),
+            "el directorio de control lo creó el arranque: si el arranque \
+             falla, se lo lleva consigo"
+        );
+    }
+
+    /// Bug del arranque a medias, camino 2: vence el plazo sin que el
+    /// operador autorice. Es el que de verdad duele -- una autorización
+    /// TARDÍA arrancaría un `privileged-worker` root contra un
+    /// directorio que ya nadie conoce --, y se puede probar de verdad
+    /// porque el plazo es un parámetro: aquí, 300 ms en vez de 120 s.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn un_arranque_que_vence_el_plazo_tambien_mata_y_borra() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_control = dir.path().join("control");
+        std::fs::create_dir_all(&dir_control).unwrap();
+        // Sin `listo.json`: nadie autoriza nunca.
+
+        let (hijo, pid) = osascript_de_mentira();
+        let inicio = tokio::time::Instant::now();
+
+        let Err(error) =
+            esperar_trabajador_listo(hijo, &dir_control, Duration::from_millis(300)).await
+        else {
+            panic!("sin listo.json el arranque tiene que vencer");
+        };
+
+        assert!(matches!(error, AppError::ElevationFailed(_)));
+        assert!(inicio.elapsed() < Duration::from_secs(20));
+        assert!(!sigue_vivo(pid), "el diálogo pendiente no puede sobrevivir");
+        assert!(!dir_control.exists());
     }
 
     #[cfg(target_os = "macos")]
