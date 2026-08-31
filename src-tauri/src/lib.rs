@@ -292,25 +292,20 @@ async fn run_start(
     phase: String,
     tool_id: String,
     targets: Vec<String>,
+    elevar: bool,
 ) -> Result<()> {
     let fase = fase_desde_str(&phase)?;
     let cancelar = CancellationToken::new();
     reservar_ejecucion(&state, &cancelar)?;
 
-    // TODO(Fase 6, Task 6): sustituir este `false` por el `elevar` real
-    // que mande el frontend. Mientras siga aquí, la elevación entera está
-    // MUERTA: nada falla, no sale ningún diálogo, y todo el camino
-    // privilegiado (privilege.rs, worker.rs, el binario
-    // `privileged-worker`) queda sin usar sin que nada lo delate. De ahí
-    // la marca greppable: un `grep -rn TODO src-tauri/src/` antes de
-    // publicar tiene que tropezarse con esto.
-    //
-    // Todavía sin elevación: este comando aún no recibe `elevar` del
-    // frontend (llega en la Task 6 de la Fase 6). Con `false`, el
-    // orquestador calcula `privilegio_disponible` como
-    // `preflight::running_privileged()`, que es exactamente lo que este
-    // comando le pasaba antes -- mismo comportamiento, sin diálogo.
-    let elevar = false;
+    // `elevar` es una PETICIÓN del frontend ("intenta elevar"), nunca una
+    // prueba de privilegio: este comando se limita a reenviarla tal cual.
+    // Es `orchestrator::ejecutar_fase` quien de verdad intenta la
+    // elevación y quien calcula `privilegio_disponible` a partir del
+    // autoinforme verificado del worker (`Listo.es_root`) -- nunca a
+    // partir de este booleano directamente. No añadir aquí ningún camino
+    // que use `elevar` para fijar privilegio sin pasar por esa
+    // verificación.
     let opciones = PhaseOptions::default();
 
     // `state: State<'_, AppState>` no sobrevive dentro de la tarea
@@ -503,8 +498,13 @@ async fn run_start(
 /// duplicado: un objetivo fuera de alcance se rechaza ANTES de que el
 /// operador llegue a ver un diálogo de confirmación plausible.
 ///
-/// Sin parámetro `privileged`, por lo mismo que `run_start`: el
-/// privilegio lo calcula el backend, nunca el frontend.
+/// Recibe `elevar` del frontend, pero como PETICIÓN hipotética, no como
+/// hecho: aquí no se ejecuta nada, así que no hay ningún privilegio real
+/// que verificar todavía -- solo se enseña el argv que resultaría SI la
+/// elevación (que esta llamada nunca intenta) tuviera éxito. Esto es
+/// distinto de `run_start`/`ejecutar_fase`, donde `elevar` solo dispara
+/// el intento real y es el autoinforme verificado del worker quien decide
+/// el privilegio efectivo -- nunca este booleano directamente.
 ///
 /// `command(async)` y no `command` a secas: el cuerpo sigue siendo
 /// síncrono, pero `planificar` valida el alcance y eso resuelve DNS de
@@ -522,13 +522,13 @@ fn run_preview(
     phase: String,
     tool_id: String,
     targets: Vec<String>,
+    elevar: bool,
 ) -> Result<Vec<String>> {
     let fase = fase_desde_str(&phase)?;
-    let privileged = preflight::running_privileged();
     let opciones = PhaseOptions::default();
     let registro = adapters::registry();
     let (invocaciones, _id_engagement) = orchestrator::planificar(
-        &state, &registro, fase, &tool_id, &targets, privileged, &opciones,
+        &state, &registro, fase, &tool_id, &targets, elevar, &opciones,
     )?;
     Ok(invocaciones
         .iter()
