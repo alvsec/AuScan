@@ -76,6 +76,7 @@
     "previsualizando": "Preparing confirmation…",
     "corriendo": "Running…",
     "sinLineas": "No output yet.",
-    "recuento": "{{hosts}} hosts, {{servicios}} services, {{observaciones}} observations"
+    "recuento": "{{hosts}} hosts, {{servicios}} services, {{observaciones}} observations",
+    "elevar": "Elevate this phase (asks for administrator authorization)"
   }
 }

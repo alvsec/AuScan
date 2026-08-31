@@ -12,7 +12,7 @@ type RunStore = {
   runsTerminados: RunDone[];
   recuentoFinal: FaseTerminada | null;
   error: string | null;
-  iniciar: (phase: string, toolId: string, targets: string[]) => Promise<void>;
+  iniciar: (phase: string, toolId: string, targets: string[], elevar: boolean) => Promise<void>;
   cancelar: () => Promise<void>;
   _suscribir: () => Promise<UnlistenFn[]>;
   _desuscribir: UnlistenFn[] | null;
@@ -33,7 +33,7 @@ export const useRunStore = create<RunStore>((set, get) => ({
   error: null,
   _desuscribir: null,
 
-  iniciar: async (phase, toolId, targets) => {
+  iniciar: async (phase, toolId, targets, elevar) => {
     get()._desuscribir?.forEach((unlisten) => unlisten());
     set({
       estado: "corriendo",
@@ -46,7 +46,7 @@ export const useRunStore = create<RunStore>((set, get) => ({
     try {
       const unlisten = await get()._suscribir();
       set({ _desuscribir: unlisten });
-      await api.start(phase, toolId, targets);
+      await api.start(phase, toolId, targets, elevar);
     } catch (e) {
       set({ error: mensaje(e), estado: "inactivo" });
     }

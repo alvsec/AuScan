@@ -14,6 +14,7 @@ export function Run() {
   const { estado, lineas, runsTerminados, recuentoFinal, error, iniciar, cancelar } = useRunStore();
   const [fase, setFase] = useState<(typeof FASES)[number]>("discovery");
   const [objetivosTexto, setObjetivosTexto] = useState("");
+  const [elevar, setElevar] = useState(false);
   const [confirmando, setConfirmando] = useState(false);
   const [previsualizacion, setPrevisualizacion] = useState<string[] | null>(null);
   // Error propio, separado del `error` de la tienda: aquel habla de una
@@ -41,7 +42,7 @@ export function Run() {
     setErrorPrevisualizacion(null);
     setCargandoPrevisualizacion(true);
     try {
-      const lineas = await api.preview(fase, "nmap", objetivos);
+      const lineas = await api.preview(fase, "nmap", objetivos, elevar);
       setPrevisualizacion(lineas);
       setConfirmando(true);
     } catch (e) {
@@ -58,7 +59,7 @@ export function Run() {
 
   const lanzar = async () => {
     setConfirmando(false);
-    await iniciar(fase, "nmap", objetivos);
+    await iniciar(fase, "nmap", objetivos, elevar);
   };
 
   return (
@@ -99,6 +100,22 @@ export function Run() {
         onChange={(e) => setObjetivosTexto(e.target.value)}
         disabled={estado === "corriendo" || confirmando || cargandoPrevisualizacion}
       />
+
+      {/* `elevar` es una PETICIÓN de elevación, nunca una prueba de
+          privilegio: el backend la verifica él mismo. Se congela con las
+          mismas tres condiciones que fase/objetivos porque cambia el argv
+          tanto como ellos -- si se pudiera tocar con el diálogo abierto,
+          el operador confirmaría un argv que ya no es el que se lanza. */}
+      <label htmlFor="elevar">
+        <input
+          id="elevar"
+          type="checkbox"
+          checked={elevar}
+          onChange={(e) => setElevar(e.target.checked)}
+          disabled={estado === "corriendo" || confirmando || cargandoPrevisualizacion}
+        />
+        {t("run.elevar")}
+      </label>
 
       {!confirmando && (
         <button

@@ -76,6 +76,7 @@
     "previsualizando": "Preparando la confirmación…",
     "corriendo": "Corriendo…",
     "sinLineas": "Sin salida todavía.",
-    "recuento": "{{hosts}} hosts, {{servicios}} servicios, {{observaciones}} observaciones"
+    "recuento": "{{hosts}} hosts, {{servicios}} servicios, {{observaciones}} observaciones",
+    "elevar": "Elevar esta fase (pide autorización de administrador)"
   }
 }

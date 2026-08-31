@@ -56,10 +56,54 @@ describe("Run", () => {
       phase: "discovery",
       toolId: "nmap",
       targets: ["198.51.100.5"],
+      elevar: false,
     });
     // La vista previa no ejecuta nada: hasta confirmar, `run_start` no se
     // ha llamado ni una vez.
     expect(invoke).not.toHaveBeenCalledWith("run_start", expect.anything());
+  });
+
+  it("pide la vista previa con elevar=true si la casilla está marcada", async () => {
+    render(<Run />);
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
+    await userEvent.click(screen.getByLabelText(/elevar esta fase/i));
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("run_preview", {
+        phase: "discovery",
+        toolId: "nmap",
+        targets: ["198.51.100.5"],
+        elevar: true,
+      });
+    });
+  });
+
+  it("no eleva por defecto", async () => {
+    render(<Run />);
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "run_preview",
+        expect.objectContaining({ elevar: false }),
+      );
+    });
+  });
+
+  // El diálogo enseña el argv real de `run_preview`; si `elevar` pudiera
+  // cambiar entre la vista previa y `run_start` -- p.ej. porque el
+  // operador la desmarca con el diálogo ya abierto -- la confirmación
+  // mentiría igual que mentiría si se pudiera cambiar fase/objetivos, así
+  // que la casilla se congela con las mismas tres condiciones.
+  it("congela la casilla de elevar mientras el diálogo de confirmación está abierto", async () => {
+    render(<Run />);
+    await userEvent.type(screen.getByLabelText(/objetivos/i), "198.51.100.5");
+    await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
+
+    await screen.findByRole("dialog");
+    expect(screen.getByLabelText(/elevar esta fase/i)).toBeDisabled();
   });
 
   it("enseña una línea por invocación cuando la fase planifica varias", async () => {
@@ -86,7 +130,7 @@ describe("Run", () => {
 
     await screen.findByRole("dialog");
     expect(screen.getByLabelText(/objetivos/i)).toBeDisabled();
-    expect(screen.getByLabelText(/fase/i)).toBeDisabled();
+    expect(screen.getByLabelText(/^fase$/i)).toBeDisabled();
   });
 
   it("vuelve a dejar editar tras cancelar la confirmación", async () => {
@@ -96,7 +140,7 @@ describe("Run", () => {
     await userEvent.click(await screen.findByRole("button", { name: /cancelar edición/i }));
 
     expect(screen.getByLabelText(/objetivos/i)).toBeEnabled();
-    expect(screen.getByLabelText(/fase/i)).toBeEnabled();
+    expect(screen.getByLabelText(/^fase$/i)).toBeEnabled();
   });
 
   // `run_preview` valida el alcance en el backend, y eso resuelve DNS:
@@ -121,7 +165,7 @@ describe("Run", () => {
     // podría reescribir el objetivo mientras espera y lanzar contra un
     // valor distinto del que acabará viendo en el diálogo.
     expect(screen.getByLabelText(/objetivos/i)).toBeDisabled();
-    expect(screen.getByLabelText(/fase/i)).toBeDisabled();
+    expect(screen.getByLabelText(/^fase$/i)).toBeDisabled();
 
     // Insistir no encadena una segunda vista previa en vuelo.
     await userEvent.click(screen.getByRole("button", { name: /lanzar/i }));
@@ -160,6 +204,7 @@ describe("Run", () => {
         phase: "discovery",
         toolId: "nmap",
         targets: ["198.51.100.5"],
+        elevar: false,
       });
     });
   });

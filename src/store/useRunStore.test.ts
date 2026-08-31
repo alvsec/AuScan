@@ -42,21 +42,21 @@ describe("useRunStore", () => {
 
   it("pasa a corriendo y limpia el estado anterior al iniciar", async () => {
     invoke.mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
     expect(useRunStore.getState().estado).toBe("corriendo");
     expect(useRunStore.getState().lineas).toEqual([]);
   });
 
   it("acumula líneas de log según llegan por el evento run:log", async () => {
     invoke.mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
     listeners["run:log"]!({ payload: { origen: "stdout", texto: "hola" } });
     expect(useRunStore.getState().lineas).toEqual([{ origen: "stdout", texto: "hola" }]);
   });
 
   it("vuelve a inactivo cuando llega run:fase-terminada", async () => {
     invoke.mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
     listeners["run:fase-terminada"]!({ payload: { hosts: 0, servicios: 0, observaciones: 0 } });
     expect(useRunStore.getState().estado).toBe("inactivo");
   });
@@ -67,7 +67,7 @@ describe("useRunStore", () => {
   // se guardara del evento no habría de dónde sacarlo.
   it("guarda el recuento que trae run:fase-terminada", async () => {
     invoke.mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
     listeners["run:fase-terminada"]!({ payload: { hosts: 3, servicios: 7, observaciones: 11 } });
     expect(useRunStore.getState().recuentoFinal).toEqual({
       hosts: 3,
@@ -78,15 +78,15 @@ describe("useRunStore", () => {
 
   it("limpia el recuento de la fase anterior al iniciar otra", async () => {
     invoke.mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
     listeners["run:fase-terminada"]!({ payload: { hosts: 3, servicios: 7, observaciones: 11 } });
-    await useRunStore.getState().iniciar("services", "nmap", ["198.51.100.5"]);
+    await useRunStore.getState().iniciar("services", "nmap", ["198.51.100.5"], false);
     expect(useRunStore.getState().recuentoFinal).toBeNull();
   });
 
   it("guarda el error y vuelve a inactivo si start falla", async () => {
     invoke.mockRejectedValue("fuera de alcance");
-    await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"]);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"], false);
     expect(useRunStore.getState().error).toBe("fuera de alcance");
     expect(useRunStore.getState().estado).toBe("inactivo");
   });
@@ -99,16 +99,16 @@ describe("useRunStore", () => {
   // importante que hace esta aplicación.
   it("guarda el error cuando llega por el evento run:error", async () => {
     invoke.mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"]);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["203.0.113.9"], false);
     listeners["run:error"]!({ payload: { mensaje: "objetivo fuera de alcance: 203.0.113.9" } });
     expect(useRunStore.getState().error).toBe("objetivo fuera de alcance: 203.0.113.9");
   });
 
   it("cancela las suscripciones anteriores si iniciar() se llama de nuevo", async () => {
     invoke.mockResolvedValue(undefined);
-    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"]);
+    await useRunStore.getState().iniciar("discovery", "nmap", ["198.51.100.5"], false);
     const unlistenPrevio = unlistenMocks["run:log"];
-    await useRunStore.getState().iniciar("services", "nmap", ["198.51.100.5"]);
+    await useRunStore.getState().iniciar("services", "nmap", ["198.51.100.5"], false);
     expect(unlistenPrevio).toHaveBeenCalledTimes(1);
   });
 });
