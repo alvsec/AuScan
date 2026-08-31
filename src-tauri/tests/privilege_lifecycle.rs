@@ -88,6 +88,72 @@ async fn cancelar_durante_ejecutar_privilegiado_marca_el_centinela_y_espera_el_e
     manejo.await.unwrap();
 }
 
+/// El centinela de cancelar es de la FASE, pero el plazo de una
+/// invocación es de la INVOCACIÓN: son dos mecanismos distintos, y el
+/// segundo marcaba el primero sin retirarlo nunca. Como el trabajador
+/// mira ese centinela en cada orden, desde que aparece y para siempre,
+/// una invocación vencida por plazo mataba nada más nacer a TODAS las
+/// que vinieran detrás en la misma fase -- que el orquestador archivaba
+/// como `tool_run` "failed" con un crudo de cero bytes: un registro
+/// falso de un escaneo que nunca corrió.
+///
+/// Aquí el token NUNCA se cancela: lo único que vence es el plazo de la
+/// primera invocación. Si tras eso la segunda no corre con normalidad,
+/// el centinela se quedó puesto.
+#[tokio::test]
+async fn el_plazo_de_una_invocacion_no_envenena_a_la_siguiente_de_la_fase() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manejo, trabajador) = trabajador_de_prueba(dir.path()).await;
+
+    // Invocación 1: se pasa de plazo (500 ms contra un `sleep 30`).
+    let primera = privilege::ejecutar_privilegiado(
+        &trabajador,
+        1,
+        &PathBuf::from("/bin/sleep"),
+        &["30".to_string()],
+        Duration::from_millis(500),
+        CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert!(primera.cancelado, "la primera tenía que vencer por plazo");
+    assert!(
+        !privilege::hay_cancelar(dir.path()),
+        "el centinela de cancelar es de la fase: una invocación vencida \
+         por plazo no puede dejarlo puesto para las siguientes"
+    );
+
+    // Invocación 2, misma fase y mismo trabajador: tiene que correr de
+    // verdad. Sin la limpieza, vuelve con exit_code None y sin salida.
+    let segunda = privilege::ejecutar_privilegiado(
+        &trabajador,
+        2,
+        &PathBuf::from("/bin/echo"),
+        &["sigue-viva".to_string()],
+        Duration::from_secs(10),
+        CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    assert!(!segunda.cancelado);
+    assert_eq!(
+        segunda.exit_code,
+        Some(0),
+        "la siguiente invocación de la fase tiene que ejecutarse de verdad"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&segunda.raw).trim_end(),
+        "sigue-viva",
+        "y dejar su salida real, no un crudo vacío"
+    );
+
+    privilege::detener_trabajador(trabajador).await.unwrap();
+    manejo.await.unwrap();
+}
+
 /// Espejo de
 /// `tests/exec_spawn.rs::ejecutar_con_el_token_ya_cancelado_ni_siquiera_lanza_el_proceso`
 /// para el camino privilegiado: un token ya cancelado antes de llamar

@@ -125,6 +125,27 @@ pub fn hay_cancelar(dir_control: &Path) -> bool {
     ruta_cancelar(dir_control).exists()
 }
 
+/// Borra el centinela de cancelar. Que ya no estuviera no es un error:
+/// esta función solo garantiza que al volver NO está, venga de donde
+/// venga.
+///
+/// Hace falta porque el centinela es de la FASE, no de la invocación:
+/// el trabajador lo mira en cada orden, para siempre, desde que
+/// aparece. Para una cancelación de verdad da igual (la fase se acaba
+/// justo después), pero el plazo de una invocación -- un mecanismo
+/// completamente aparte, que no cancela nada de la fase -- lo marca
+/// igual, y sin borrarlo la SIGUIENTE invocación de la misma fase nacía
+/// muerta: el trabajador la mataba nada más lanzarla y el orquestador
+/// archivaba un `tool_run` "failed" con un crudo de cero bytes por un
+/// escaneo que jamás llegó a correr.
+fn limpiar_cancelar(dir_control: &Path) -> Result<()> {
+    match std::fs::remove_file(ruta_cancelar(dir_control)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(AppError::Io(e)),
+    }
+}
+
 pub fn marcar_detener(dir_control: &Path) -> Result<()> {
     std::fs::write(ruta_detener(dir_control), b"").map_err(AppError::Io)
 }
@@ -535,6 +556,16 @@ async fn ejecutar_privilegiado_con_plazo(
                 }
                 tokio::time::sleep(INTERVALO_SONDEO_LECTURA).await;
             }
+            // Confirmado que esta invocación ya está muerta, el
+            // centinela se retira: es de la fase, y la fase puede tener
+            // más invocaciones detrás (ver `limpiar_cancelar`). Se hace
+            // aquí y no también en el camino de error de arriba a
+            // propósito -- si el trabajador solo iba lento, retirarle la
+            // orden de matar al salir con error dejaría vivo a su hijo;
+            // por ese camino la fase aborta y es `detener_trabajador`
+            // (que el trabajador atiende también con una orden en vuelo)
+            // quien se lo lleva por delante.
+            limpiar_cancelar(dir_control)?;
             return Ok(ResultadoEjecucion {
                 raw,
                 stderr: stderr_completo,
