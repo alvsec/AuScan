@@ -436,7 +436,7 @@ El bucle no sabe que corre como root — nada de lo que hace depende de serlo, a
 Crea `src-tauri/tests/worker.rs`:
 
 ```rust
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use auscan_lib::privilege::{self, Orden};
@@ -524,8 +524,6 @@ async fn el_centinela_de_detener_para_el_bucle_entero() {
     let resultado = tokio::time::timeout(Duration::from_secs(5), manejo).await;
     assert!(resultado.is_ok(), "el bucle no salió tras el centinela de detener");
 }
-
-use std::path::PathBuf;
 
 async fn esperar_listo(dir: &Path) -> privilege::Listo {
     for _ in 0..50 {
