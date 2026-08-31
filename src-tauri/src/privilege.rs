@@ -41,12 +41,22 @@ pub struct Listo {
     pub es_root: bool,
 }
 
+fn nombre_orden(seq: i64) -> String {
+    format!("{seq:04}.orden.json")
+}
+
+fn nombre_estado(seq: i64) -> String {
+    format!("{seq:04}.estado.json")
+}
+
+const NOMBRE_LISTO: &str = "listo.json";
+
 fn ruta_orden(dir_control: &Path, seq: i64) -> PathBuf {
-    dir_control.join(format!("{seq:04}.orden.json"))
+    dir_control.join(nombre_orden(seq))
 }
 
 fn ruta_estado(dir_control: &Path, seq: i64) -> PathBuf {
-    dir_control.join(format!("{seq:04}.estado.json"))
+    dir_control.join(nombre_estado(seq))
 }
 
 pub fn ruta_stdout(dir_control: &Path, seq: i64) -> PathBuf {
@@ -58,7 +68,7 @@ pub fn ruta_stderr(dir_control: &Path, seq: i64) -> PathBuf {
 }
 
 fn ruta_listo(dir_control: &Path) -> PathBuf {
-    dir_control.join("listo.json")
+    dir_control.join(NOMBRE_LISTO)
 }
 
 fn ruta_cancelar(dir_control: &Path) -> PathBuf {
@@ -69,9 +79,41 @@ fn ruta_detener(dir_control: &Path) -> PathBuf {
     dir_control.join("detener")
 }
 
+/// Escribe `bytes` en `dir_control/nombre` sin que ningún lector pueda
+/// llegar a ver el fichero a medias: primero a un temporal en el MISMO
+/// directorio, y luego un `rename` encima del destino.
+///
+/// El `rename` dentro de un mismo sistema de ficheros es atómico en
+/// POSIX: quien mire verá o el contenido viejo entero o el nuevo entero,
+/// nunca una mezcla. Con el `std::fs::write` de antes -- que trunca y
+/// luego rellena --, un lector sondeando cada 200 ms podía caer justo en
+/// medio, y como TODOS los lectores de este módulo tratan un JSON que no
+/// parsea como `ProtocoloElevacion` (un error duro, no un "todavía no"),
+/// esa lectura rota se llevaba por delante la fase entera.
+///
+/// El temporal lleva el sufijo `.tmp` DESPUÉS del nombre final, así que
+/// no puede confundirse con ningún nombre del protocolo (`.orden.json`,
+/// `.estado.json`, `listo.json`, `cancelar`, `detener`, `.stdout`,
+/// `.stderr`), que es lo único que los lectores buscan por nombre
+/// exacto. Que el nombre del temporal sea determinista basta porque
+/// cada fichero del protocolo tiene un único escritor: la orden la
+/// escribe la app, el estado y el listo el trabajador.
+fn escribir_atomico(dir_control: &Path, nombre: &str, bytes: &[u8]) -> Result<()> {
+    let temporal = dir_control.join(format!("{nombre}.tmp"));
+    std::fs::write(&temporal, bytes).map_err(AppError::Io)?;
+    if let Err(e) = std::fs::rename(&temporal, dir_control.join(nombre)) {
+        // Sin esto, un `rename` fallido dejaría el temporal ahí para
+        // siempre -- dentro de un directorio que guarda la salida cruda
+        // de escaneos de un cliente.
+        let _ = std::fs::remove_file(&temporal);
+        return Err(AppError::Io(e));
+    }
+    Ok(())
+}
+
 pub fn escribir_orden(dir_control: &Path, seq: i64, orden: &Orden) -> Result<()> {
     let json = serde_json::to_string(orden).expect("Orden siempre serializa");
-    std::fs::write(ruta_orden(dir_control, seq), json).map_err(AppError::Io)
+    escribir_atomico(dir_control, &nombre_orden(seq), json.as_bytes())
 }
 
 pub fn leer_orden(dir_control: &Path, seq: i64) -> Result<Option<Orden>> {
@@ -87,7 +129,7 @@ pub fn leer_orden(dir_control: &Path, seq: i64) -> Result<Option<Orden>> {
 
 pub fn escribir_estado(dir_control: &Path, seq: i64, estado: &Estado) -> Result<()> {
     let json = serde_json::to_string(estado).expect("Estado siempre serializa");
-    std::fs::write(ruta_estado(dir_control, seq), json).map_err(AppError::Io)
+    escribir_atomico(dir_control, &nombre_estado(seq), json.as_bytes())
 }
 
 pub fn leer_estado(dir_control: &Path, seq: i64) -> Result<Option<Estado>> {
@@ -103,7 +145,7 @@ pub fn leer_estado(dir_control: &Path, seq: i64) -> Result<Option<Estado>> {
 
 pub fn escribir_listo(dir_control: &Path, listo: &Listo) -> Result<()> {
     let json = serde_json::to_string(listo).expect("Listo siempre serializa");
-    std::fs::write(ruta_listo(dir_control), json).map_err(AppError::Io)
+    escribir_atomico(dir_control, NOMBRE_LISTO, json.as_bytes())
 }
 
 pub fn leer_listo(dir_control: &Path) -> Result<Option<Listo>> {
@@ -625,6 +667,71 @@ mod tests {
         escribir_orden(dir.path(), 1, &orden).unwrap();
         let leida = leer_orden(dir.path(), 1).unwrap();
         assert_eq!(leida, Some(orden));
+    }
+
+    /// Ninguna escritura del protocolo puede dejarse ver a medias.
+    ///
+    /// Los lectores sondean cada 200 ms y tratan un JSON que no parsea
+    /// como `ProtocoloElevacion` -- un error duro que se lleva la fase
+    /// por delante --, así que "casi nunca" no vale: con `std::fs::write`
+    /// (truncar y rellenar) la ventana existe y este test la encuentra a
+    /// la primera. Con el `rename` no existe.
+    ///
+    /// El argv es enorme a propósito: es lo que hace que el relleno del
+    /// fichero no quepa en una sola operación y la ventana se abra de
+    /// verdad.
+    #[test]
+    fn ninguna_escritura_del_protocolo_se_deja_ver_a_medias() {
+        let dir = tempfile::tempdir().unwrap();
+        let orden_de = |n: usize| Orden {
+            binario: PathBuf::from("/usr/bin/true"),
+            argv: vec!["x".repeat(n)],
+            ruta_stdout: dir.path().join("0001.stdout"),
+            ruta_stderr: dir.path().join("0001.stderr"),
+        };
+        let corta = orden_de(64 * 1024);
+        let larga = orden_de(512 * 1024);
+        // Ya existe antes de arrancar el escritor: así una lectura que
+        // devuelva `None` es un fallo de verdad y no una carrera.
+        escribir_orden(dir.path(), 1, &corta).unwrap();
+
+        let escritor = std::thread::spawn({
+            let ruta = dir.path().to_path_buf();
+            let (corta, larga) = (corta.clone(), larga.clone());
+            move || {
+                for i in 0..300 {
+                    let orden = if i % 2 == 0 { &larga } else { &corta };
+                    escribir_orden(&ruta, 1, orden).unwrap();
+                }
+            }
+        });
+
+        let mut lecturas = 0;
+        while !escritor.is_finished() {
+            let leida = leer_orden(dir.path(), 1)
+                .expect("un lector que sondea no puede ver nunca una orden a medias")
+                .expect("la orden existe desde antes de arrancar el escritor");
+            assert!(
+                leida == corta || leida == larga,
+                "la orden leída no es ninguna de las dos que se escriben"
+            );
+            lecturas += 1;
+        }
+        escritor.join().unwrap();
+
+        assert!(
+            lecturas > 10,
+            "el lector tenía que haber sondeado de verdad mientras se escribía \
+             (solo {lecturas} lecturas)"
+        );
+        // Y no queda basura: el temporal se renombró, no se quedó.
+        let restos: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(restos.is_empty(), "temporales sin recoger: {restos:?}");
     }
 
     #[test]
