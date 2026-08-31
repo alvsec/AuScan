@@ -7,6 +7,7 @@ pub mod gen_fixtures;
 pub mod orchestrator;
 pub mod paths;
 pub mod preflight;
+pub mod privilege;
 pub mod runs;
 pub mod scope;
 pub mod state;

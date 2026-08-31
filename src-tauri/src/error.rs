@@ -84,6 +84,12 @@ pub enum AppError {
     #[error("los datos parseados son inconsistentes: {0}")]
     InconsistentParse(String),
 
+    #[error("protocolo de elevación corrupto: {0}")]
+    ProtocoloElevacion(String),
+
+    #[error("elevación fallida: {0}")]
+    ElevationFailed(String),
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
