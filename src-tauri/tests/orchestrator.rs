@@ -277,6 +277,142 @@ async fn ejecutar_fase_persiste_lo_que_parse_devuelve() {
     assert_eq!(n_runs, 1);
 }
 
+/// Los directorios de control que `iniciar_trabajador` crea bajo el
+/// temporal del sistema, ahora mismo. Es la huella observable de haber
+/// intentado elevar: `iniciar_trabajador` crea el directorio ANTES de
+/// lanzar `osascript`, así que aparece incluso si el diálogo se rechaza.
+/// Nada más en toda la suite llama a `iniciar_trabajador`, así que un
+/// directorio nuevo entre dos instantáneas solo puede haberlo puesto la
+/// llamada que hay en medio.
+fn dirs_de_control_en_temporal() -> std::collections::BTreeSet<std::path::PathBuf> {
+    let Ok(entradas) = std::fs::read_dir(std::env::temp_dir()) else {
+        return std::collections::BTreeSet::new();
+    };
+    entradas
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("auscan-privilegio-"))
+        })
+        .collect()
+}
+
+/// Una fase con `elevar: false` no puede ni rozar el camino de
+/// elevación: nada de `osascript`, nada de diálogo, nada de esperar 120
+/// segundos a que el operador autorice algo que nadie pidió.
+///
+/// Y de paso prueba el otro lado del cambio de firma: el sexto parámetro
+/// ya NO es `privilegio_disponible`. Lo que se archiva en
+/// `tool_run.privileged` -- el privilegio REAL con el que corrió la
+/// herramienta -- lo calcula ahora el propio orquestador, así que tiene
+/// que coincidir con `preflight::running_privileged()` sin que este test
+/// se lo haya dicho. Antes, ese `false` de la posición seis era
+/// literalmente lo que acababa en la columna; si alguien volviera a
+/// enchufar el parámetro directamente, correr la suite como root lo
+/// delataría.
+#[tokio::test]
+async fn una_fase_sin_elevar_no_intenta_arrancar_ningun_trabajador() {
+    let (_dir, state, _id) = estado_de_prueba();
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(AdaptadorDePrueba)];
+    let sucesos = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let s2 = sucesos.clone();
+
+    let antes = dirs_de_control_en_temporal();
+
+    ejecutar_fase(
+        &state,
+        &registro,
+        Phase::Discovery,
+        "prueba",
+        &["198.51.100.5".to_string()],
+        false, // elevar
+        &PhaseOptions::default(),
+        CancellationToken::new(),
+        move |suceso| s2.lock().unwrap().push(suceso),
+    )
+    .await
+    .unwrap();
+
+    // 1. Ni un directorio de control nuevo: no se intentó arrancar nada.
+    //    (Que el test haya terminado ya dice bastante -- un
+    //    `iniciar_trabajador` de verdad se habría quedado esperando el
+    //    diálogo --, pero "no colgó" no es una aserción; esto sí.)
+    let nuevos: Vec<_> = dirs_de_control_en_temporal()
+        .difference(&antes)
+        .cloned()
+        .collect();
+    assert!(
+        nuevos.is_empty(),
+        "una fase sin elevar no puede crear directorio de control: {nuevos:?}"
+    );
+
+    // 2. La fase siguió siendo la de siempre, recuento incluido.
+    let sucesos = sucesos.lock().unwrap();
+    assert!(
+        sucesos.iter().any(|s| matches!(
+            s,
+            SucesoRun::FaseTerminada {
+                hosts: 1,
+                servicios: 0,
+                observaciones: 1
+            }
+        )),
+        "el camino sin elevar sigue archivando y contando lo de siempre"
+    );
+
+    // 3. Y el privilegio archivado es el que el orquestador calculó por
+    //    su cuenta, no un booleano que le pasara quien llama.
+    let guard = state.open.lock().unwrap();
+    let conn = &guard.as_ref().unwrap().conn;
+    let privilegiado: bool = conn
+        .query_row("SELECT privileged FROM tool_run LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        privilegiado,
+        auscan_lib::preflight::running_privileged(),
+        "sin trabajador, el privilegio archivado es el REAL del proceso"
+    );
+}
+
+/// El otro lado de la Global Constraint sobre `elevar`: pedir elevación
+/// donde no la hay es un error, nunca un "sigue sin privilegios" mudo.
+/// Cambiar en silencio lo que se escanea sin que el operador lo decidiera
+/// es exactamente el fallo que este diseño existe para impedir.
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn pedir_elevacion_fuera_de_macos_falla_en_vez_de_seguir_sin_privilegios() {
+    let (_dir, state, _id) = estado_de_prueba();
+    let registro: Vec<Box<dyn ToolAdapter>> = vec![Box::new(AdaptadorDePrueba)];
+
+    let resultado = ejecutar_fase(
+        &state,
+        &registro,
+        Phase::Discovery,
+        "prueba",
+        &["198.51.100.5".to_string()],
+        true, // elevar
+        &PhaseOptions::default(),
+        CancellationToken::new(),
+        |_| {},
+    )
+    .await;
+
+    assert!(
+        matches!(resultado, Err(AppError::ElevationFailed(_))),
+        "se esperaba ElevationFailed, llegó {resultado:?}"
+    );
+    // Y ni una fila: si hubiera seguido adelante sin privilegios, habría
+    // lanzado el escáner igualmente y dejado su fila de auditoría.
+    let guard = state.open.lock().unwrap();
+    let conn = &guard.as_ref().unwrap().conn;
+    let n_runs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tool_run", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n_runs, 0, "una elevación fallida no ejecuta nada");
+}
+
 #[tokio::test]
 async fn ejecutar_fase_rechaza_un_objetivo_fuera_de_alcance() {
     let (_dir, state, _id) = estado_de_prueba();

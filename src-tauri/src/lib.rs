@@ -297,12 +297,12 @@ async fn run_start(
     let cancelar = CancellationToken::new();
     reservar_ejecucion(&state, &cancelar)?;
 
-    // El privilegio real lo calcula el comando, nunca el frontend: si
-    // `privileged` llegase como argumento de `invoke`, cualquier llamador
-    // -- o un bug de la propia UI -- podría declararse privilegiado sin
-    // que el proceso lo esté de verdad, reabriendo con el frontend el
-    // hueco que la Task 1 cerró para los adaptadores.
-    let privileged = preflight::running_privileged();
+    // Todavía sin elevación: este comando aún no recibe `elevar` del
+    // frontend (llega en la Task 6 de la Fase 6). Con `false`, el
+    // orquestador calcula `privilegio_disponible` como
+    // `preflight::running_privileged()`, que es exactamente lo que este
+    // comando le pasaba antes -- mismo comportamiento, sin diálogo.
+    let elevar = false;
     let opciones = PhaseOptions::default();
 
     // `state: State<'_, AppState>` no sobrevive dentro de la tarea
@@ -348,7 +348,7 @@ async fn run_start(
                 fase,
                 &tool_id,
                 &targets,
-                privileged,
+                elevar,
                 &opciones,
                 cancelar,
                 move |suceso| {

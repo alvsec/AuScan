@@ -13,6 +13,7 @@ use crate::db;
 use crate::error::{AppError, Result};
 use crate::exec::{self, LineaOrigen};
 use crate::paths;
+use crate::preflight;
 use crate::runs;
 use crate::scope::{self, SystemResolver};
 use crate::state::AppState;
@@ -121,8 +122,13 @@ pub fn planificar(
     Ok((invocaciones, id_engagement))
 }
 
-/// Ejecuta una fase completa: arma el `PlanContext`, pide las
-/// invocaciones al adaptador, y lanza cada una en orden.
+/// Ejecuta una fase completa: eleva (si se pidió), arma el
+/// `PlanContext`, pide las invocaciones al adaptador, y lanza cada una en
+/// orden.
+///
+/// `privilegio_disponible` ya NO es un booleano que decida quien llama:
+/// se calcula aquí dentro, y solo es cierto si de verdad hay un
+/// trabajador vivo y root, o si el propio proceso ya lo es.
 #[allow(clippy::too_many_arguments)]
 pub async fn ejecutar_fase(
     state: &AppState,
@@ -130,10 +136,108 @@ pub async fn ejecutar_fase(
     fase: Phase,
     tool_id: &str,
     objetivos_crudos: &[String],
-    privilegio_disponible: bool,
+    elevar: bool,
     opciones: &PhaseOptions,
     cancelar: CancellationToken,
     mut on_suceso: impl FnMut(SucesoRun) + Send + 'static,
+) -> Result<()> {
+    // Elevar, si se pidió, es lo PRIMERO -- antes de cargar el alcance
+    // siquiera. `PlanContext.privileged` decide qué banderas construye el
+    // adaptador (descubrimiento por ARP necesita root, por sondeo TCP
+    // no), así que tiene que reflejar si la elevación tuvo éxito ANTES de
+    // llamar a `plan()`, no descubrirlo a mitad de camino.
+    //
+    // Si `elevar` es true y falla -- el operador rechaza el diálogo,
+    // caduca el plazo, o (no debería pasar nunca) el trabajador dice que
+    // no es root --, la fase entera falla aquí mismo. Sin fallback
+    // silencioso a modo sin privilegios (spec §8.9): eso cambiaría lo que
+    // se escanea sin que el operador lo decidiera, y ya vio el argv
+    // previsto para `elevar=true` en la confirmación (§9.7).
+    #[cfg(target_os = "macos")]
+    let trabajador: Option<crate::privilege::TrabajadorActivo> = if elevar {
+        let dir_control = std::env::temp_dir().join(format!("auscan-privilegio-{}", uuid_simple()));
+        Some(crate::privilege::iniciar_trabajador(&dir_control).await?)
+    } else {
+        None
+    };
+    // En no-macOS no hay a qué intentar elevarse: `iniciar_trabajador` ni
+    // existe. Pedirlo es un error, nunca un "sigue sin privilegios" mudo,
+    // por la misma razón de arriba.
+    #[cfg(not(target_os = "macos"))]
+    let trabajador: Option<crate::privilege::TrabajadorActivo> = {
+        if elevar {
+            return Err(AppError::ElevationFailed(
+                "la elevación solo está disponible en macOS".to_string(),
+            ));
+        }
+        None
+    };
+
+    let privilegio_disponible = trabajador.is_some() || preflight::running_privileged();
+
+    let resultado = ejecutar_fase_interna(
+        state,
+        registro,
+        fase,
+        tool_id,
+        objetivos_crudos,
+        privilegio_disponible,
+        &trabajador,
+        opciones,
+        cancelar,
+        &mut on_suceso,
+    )
+    .await;
+
+    // La parada corre pase lo que pase -- también si la fase falló a
+    // mitad --, porque dejar caer un `TrabajadorActivo` sin llamarla deja
+    // un proceso root esperando órdenes para siempre (ver el comentario
+    // del tipo en `privilege.rs`: no implementa `Drop` a propósito).
+    //
+    // Su error NO pisa al de la fase: si la fase ya falló, lo que el
+    // operador necesita leer es "objetivo fuera de alcance", no "no se
+    // pudo escribir el centinela de parada". Solo cuando la fase fue bien
+    // el fallo de la parada es la única noticia que hay que dar.
+    if let Some(t) = trabajador {
+        let parada = crate::privilege::detener_trabajador(t).await;
+        if resultado.is_ok() {
+            parada?;
+        }
+    }
+
+    resultado
+}
+
+/// Nombre único y corto para el directorio de control de una fase. No
+/// hace falta un UUID de verdad (no hay ninguna propiedad criptográfica
+/// que sostener aquí): basta con que dos fases de este mismo proceso, o
+/// de dos procesos a la vez, no compartan directorio.
+#[cfg(target_os = "macos")]
+fn uuid_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{nanos:x}-{}", std::process::id())
+}
+
+/// El cuerpo de la fase, ya con el privilegio decidido y el trabajador
+/// (si lo hay) en marcha. Separado de `ejecutar_fase` para que el
+/// arranque y la parada del trabajador queden en un solo sitio, con el
+/// `?` de dentro sin poder saltarse la parada.
+#[allow(clippy::too_many_arguments)]
+async fn ejecutar_fase_interna(
+    state: &AppState,
+    registro: &[Box<dyn ToolAdapter>],
+    fase: Phase,
+    tool_id: &str,
+    objetivos_crudos: &[String],
+    privilegio_disponible: bool,
+    trabajador: &Option<crate::privilege::TrabajadorActivo>,
+    opciones: &PhaseOptions,
+    cancelar: CancellationToken,
+    on_suceso: &mut (impl FnMut(SucesoRun) + Send + 'static),
 ) -> Result<()> {
     let (invocaciones, id_engagement) = planificar(
         state,
@@ -169,8 +273,9 @@ pub async fn ejecutar_fase(
             &id_engagement,
             invocacion,
             privilegio_disponible,
+            trabajador,
             cancelar.clone(),
-            &mut on_suceso,
+            on_suceso,
         )
         .await?;
         total_hosts += hosts;
@@ -198,6 +303,7 @@ async fn ejecutar_invocacion(
     id_engagement: &str,
     invocacion: Invocation,
     privilegio_disponible: bool,
+    trabajador: &Option<crate::privilege::TrabajadorActivo>,
     cancelar: CancellationToken,
     on_suceso: &mut (impl FnMut(SucesoRun) + Send + 'static),
 ) -> Result<(usize, usize, usize)> {
@@ -307,8 +413,26 @@ async fn ejecutar_invocacion(
         });
     };
     let timeout: Duration = invocacion.timeout;
-    let resultado =
-        exec::ejecutar(&binario, &invocacion.argv, timeout, cancelar, &mut on_linea).await?;
+    // La única diferencia entre los dos caminos es QUÉ función lanza el
+    // proceso. `ejecutar_privilegiado` devuelve exactamente la misma
+    // forma que `exec::ejecutar` (`ResultadoEjecucion`, con las mismas
+    // reglas para `cancelado` y `exit_code`), así que nada de lo que
+    // viene después -- el crudo, el sha, el status, el parseo, el
+    // recuento -- distingue una fase elevada de una que no lo está.
+    let resultado = if let Some(t) = trabajador {
+        crate::privilege::ejecutar_privilegiado(
+            t,
+            seq,
+            &binario,
+            &invocacion.argv,
+            timeout,
+            cancelar,
+            &mut on_linea,
+        )
+        .await?
+    } else {
+        exec::ejecutar(&binario, &invocacion.argv, timeout, cancelar, &mut on_linea).await?
+    };
 
     std::fs::write(raw_dir.join(&nombre_raw), &resultado.raw).map_err(AppError::Io)?;
     let raw_sha256 = runs::sha256_hex(&resultado.raw);
