@@ -48,3 +48,7 @@ libc = "0.2.189"
 [[bin]]
 name = "gen-fixtures"
 path = "../tools/gen-fixtures/main.rs"
+
+[[bin]]
+name = "privileged-worker"
+path = "../tools/privileged-worker/main.rs"
