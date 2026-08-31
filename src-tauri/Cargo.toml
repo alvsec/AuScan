@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Recolección para auditorías de seguridad de red autorizadas"
 authors = ["nonnamme"]
 edition = "2021"
+# `gen-fixtures` (abajo) es un segundo binario del mismo paquete; sin esto
+# `cargo run` -- que es lo que invoca `tauri dev` por debajo -- no sabe
+# cuál de los dos lanzar y falla en vez de arrancar la app.
+default-run = "auscan"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
