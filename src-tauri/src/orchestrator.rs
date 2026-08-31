@@ -175,7 +175,14 @@ pub async fn ejecutar_fase(
 
     let privilegio_disponible = trabajador.is_some() || preflight::running_privileged();
 
-    let resultado = ejecutar_fase_interna(
+    // El cuerpo va envuelto en `AtrapaPanico` y NO directamente en un
+    // `.await`: un pánico dentro (`adaptador.parse()` corre sobre la
+    // salida cruda de un escáner de terceros) desenrollaría esta función
+    // entera, dejaría caer `trabajador` -- que a propósito no implementa
+    // `Drop` -- y la parada de abajo no correría nunca. El proceso root
+    // se quedaría sondeando su directorio de control para siempre, y sin
+    // el manejo que lo posee ya no habría forma de volver a decirle nada.
+    let resultado = AtrapaPanico::nuevo(ejecutar_fase_interna(
         state,
         registro,
         fase,
@@ -186,26 +193,102 @@ pub async fn ejecutar_fase(
         opciones,
         cancelar,
         &mut on_suceso,
-    )
+    ))
     .await;
 
-    // La parada corre pase lo que pase -- también si la fase falló a
-    // mitad --, porque dejar caer un `TrabajadorActivo` sin llamarla deja
-    // un proceso root esperando órdenes para siempre (ver el comentario
-    // del tipo en `privilege.rs`: no implementa `Drop` a propósito).
-    //
-    // Su error NO pisa al de la fase: si la fase ya falló, lo que el
-    // operador necesita leer es "objetivo fuera de alcance", no "no se
-    // pudo escribir el centinela de parada". Solo cuando la fase fue bien
-    // el fallo de la parada es la única noticia que hay que dar.
+    cerrar_fase(resultado, trabajador).await
+}
+
+/// Cierra la fase: para el trabajador PASE LO QUE PASE y devuelve lo que
+/// el cuerpo dio -- o, si el cuerpo entró en pánico, relanza ese pánico
+/// una vez hecha la parada.
+///
+/// La parada corre también si la fase falló a mitad, o si se desenrolló:
+/// dejar caer un `TrabajadorActivo` sin llamarla deja un proceso root
+/// esperando órdenes para siempre (ver el comentario del tipo en
+/// `privilege.rs`).
+///
+/// Su error NO pisa al de la fase: si la fase ya falló, lo que el
+/// operador necesita leer es "objetivo fuera de alcance", no "no se pudo
+/// escribir el centinela de parada". Solo cuando la fase fue bien el
+/// fallo de la parada es la única noticia que hay que dar. Y un pánico
+/// gana a los dos: se relanza intacto (`resume_unwind` no vuelve a
+/// disparar el hook, así que la traza que ya se imprimió es la del sitio
+/// real del fallo). Tragárselo aquí escondería un bug de verdad, además
+/// de dejar al vigía del `JoinHandle` de `lib.rs` sin el pánico que
+/// espera para descongelar la pantalla.
+async fn cerrar_fase(
+    resultado: std::thread::Result<Result<()>>,
+    trabajador: Option<crate::privilege::TrabajadorActivo>,
+) -> Result<()> {
     if let Some(t) = trabajador {
         let parada = crate::privilege::detener_trabajador(t).await;
-        if resultado.is_ok() {
+        if matches!(resultado, Ok(Ok(()))) {
             parada?;
         }
     }
 
-    resultado
+    match resultado {
+        Ok(r) => r,
+        Err(carga) => std::panic::resume_unwind(carga),
+    }
+}
+
+/// Un futuro que envuelve a otro y le convierte el pánico en un `Err`,
+/// en vez de dejar que se desenrolle a través de quien lo espera.
+///
+/// Existe porque `ejecutar_fase` no puede permitirse el desenrollado
+/// limpio de siempre: entre arrancar el trabajador elevado y pararlo hay
+/// un `.await` que puede entrar en pánico sobre entrada no confiable --
+/// el mismo camino por el que `lib.rs` tiene su `GuardaEjecucion` y su
+/// vigía del `JoinHandle` --, y el recurso que hay que soltar es un
+/// proceso root, no un slot de un mutex.
+///
+/// Por qué esto y no el patrón del vigía (`spawn` + `is_panic()` sobre el
+/// `JoinHandle`): ese exige `'static + Send`, y el cuerpo de la fase toma
+/// prestado medio mundo (`&AppState`, el registro de adaptadores,
+/// `&mut on_suceso`). La garantía que hace falta es exactamente la misma;
+/// el mecanismo tiene que ser uno que sirva sobre un futuro que toma
+/// prestado, y un `catch_unwind` dentro del `poll` lo es.
+///
+/// Se escribe a mano en vez de tirar de `futures::FutureExt::catch_unwind`
+/// para no meter la familia `futures` entera como dependencia por un solo
+/// combinador. `Pin<Box<F>>` -- que es `Unpin` sea cual sea `F` -- deja
+/// hacer la proyección sin una línea de `unsafe`.
+struct AtrapaPanico<F> {
+    futuro: std::pin::Pin<Box<F>>,
+}
+
+impl<F: std::future::Future> AtrapaPanico<F> {
+    fn nuevo(futuro: F) -> Self {
+        Self {
+            futuro: Box::pin(futuro),
+        }
+    }
+}
+
+impl<F: std::future::Future> std::future::Future for AtrapaPanico<F> {
+    type Output = std::thread::Result<F::Output>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        use std::task::Poll;
+
+        // `AssertUnwindSafe` porque nada de lo que sobrevive a un pánico
+        // aquí se vuelve a mirar por este camino: el futuro de dentro
+        // queda envenenado y no se vuelve a sondear (se devuelve `Ready`),
+        // y el único estado compartido que un pánico podría dejar a medias
+        // es el `Mutex` de `AppState`, que todo el proyecto abre ya con
+        // `unwrap_or_else(|e| e.into_inner())` precisamente por esto.
+        let futuro = &mut self.get_mut().futuro;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| futuro.as_mut().poll(cx))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(v)) => Poll::Ready(Ok(v)),
+            Err(carga) => Poll::Ready(Err(carga)),
+        }
+    }
 }
 
 /// Nombre único y corto para el directorio de control de una fase. No
@@ -225,7 +308,8 @@ fn uuid_simple() -> String {
 /// El cuerpo de la fase, ya con el privilegio decidido y el trabajador
 /// (si lo hay) en marcha. Separado de `ejecutar_fase` para que el
 /// arranque y la parada del trabajador queden en un solo sitio, con el
-/// `?` de dentro sin poder saltarse la parada.
+/// `?` de dentro sin poder saltarse la parada -- y, desde que se envuelve
+/// en `AtrapaPanico`, tampoco un pánico de dentro.
 #[allow(clippy::too_many_arguments)]
 async fn ejecutar_fase_interna(
     state: &AppState,
@@ -517,4 +601,133 @@ async fn ejecutar_invocacion(
         status: status.to_string(),
     });
     Ok(recuento)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::AppError;
+
+    #[tokio::test]
+    async fn atrapa_panico_deja_pasar_los_dos_finales_normales() {
+        // Los mismos dos finales que distingue el vigía de `lib.rs`: el
+        // `Err` del futuro NO es un pánico y tiene que llegar entero.
+        let bien = AtrapaPanico::nuevo(async { Ok::<(), AppError>(()) }).await;
+        assert!(matches!(bien, Ok(Ok(()))));
+
+        let mal = AtrapaPanico::nuevo(async { Err::<(), _>(AppError::RunAlreadyActive) }).await;
+        assert!(matches!(mal, Ok(Err(AppError::RunAlreadyActive))));
+    }
+
+    /// (La traza de pánico que escupe la salida del test es la de la
+    /// tarea que se desenrolla a propósito: es lo que se está probando.)
+    #[tokio::test]
+    async fn atrapa_panico_convierte_el_desenrollado_en_un_err() {
+        // El pánico ocurre DESPUÉS de un `.await`, que es donde ocurre de
+        // verdad -- `adaptador.parse()` corre ya bien entrada la fase --
+        // y lo que obliga a que el `catch_unwind` esté dentro del `poll`
+        // y no alrededor de construir el futuro.
+        let atrapado = AtrapaPanico::nuevo(async {
+            tokio::task::yield_now().await;
+            panic!("adaptador.parse() sobre salida no confiable");
+        })
+        .await;
+
+        assert!(
+            atrapado.is_err(),
+            "el pánico tiene que llegar como carga, no llevarse por delante \
+             a quien espera el futuro"
+        );
+    }
+
+    /// El bug que motiva todo esto: un pánico en el cuerpo de la fase
+    /// saltándose la parada del trabajador elevado. Sin `AtrapaPanico`,
+    /// `ejecutar_fase` se desenrollaba, `trabajador` se dejaba caer sin
+    /// `Drop` que valiera, y el proceso root seguía sondeando su
+    /// directorio de control para siempre.
+    ///
+    /// Se ejercita el mecanismo de verdad -- `AtrapaPanico` + `cerrar_fase`,
+    /// las dos piezas reales de `ejecutar_fase` --, con un trabajador de
+    /// verdad arrancado por el camino de pruebas (sin `osascript` ni
+    /// root, igual que en `tests/privilege_lifecycle.rs`) y un cuerpo de
+    /// fase de mentira que solo sabe entrar en pánico. Lo único que no se
+    /// puede meter aquí es la fase entera: `adaptador.parse()` no es
+    /// inyectable, el registro de adaptadores es fijo.
+    ///
+    /// Se corre dentro de un `spawn` porque `cerrar_fase` RELANZA el
+    /// pánico a propósito: el `JoinHandle` es la forma de comprobar que
+    /// sigue su camino en vez de quedar tragado.
+    #[tokio::test]
+    async fn un_panico_en_el_cuerpo_de_la_fase_no_se_salta_la_parada_del_trabajador() {
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().to_path_buf();
+
+        let bucle = tokio::spawn({
+            let ruta = ruta.clone();
+            async move { crate::worker::ejecutar_bucle(ruta).await.unwrap() }
+        });
+        for _ in 0..50 {
+            if crate::privilege::leer_listo(&ruta).unwrap().is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            crate::privilege::leer_listo(&ruta).unwrap().is_some(),
+            "el trabajador de prueba no llegó a arrancar"
+        );
+
+        let trabajador = Some(crate::privilege::TrabajadorActivo::para_pruebas(
+            ruta.clone(),
+        ));
+        let ruta_para_fase = ruta.clone();
+        let tarea = tokio::spawn(async move {
+            let resultado = AtrapaPanico::nuevo(async move {
+                // El cuerpo llega a hablar con el trabajador antes de
+                // reventar: así el pánico ocurre con un trabajador de
+                // verdad a medio usar, no con uno recién arrancado.
+                assert!(!crate::privilege::hay_detener(&ruta_para_fase));
+                tokio::task::yield_now().await;
+                panic!("adaptador.parse() sobre salida no confiable");
+            })
+            .await;
+            cerrar_fase(resultado, trabajador).await
+        });
+
+        let error = tarea
+            .await
+            .expect_err("cerrar_fase tiene que relanzar el pánico, no tragárselo");
+        assert!(
+            error.is_panic(),
+            "el pánico original sigue su camino: tragárselo escondería un bug \
+             de verdad y dejaría al vigía de lib.rs sin nada que ver"
+        );
+
+        assert!(
+            crate::privilege::hay_detener(&ruta),
+            "la parada tiene que haber corrido pese al pánico: sin el \
+             centinela, el proceso root sondea su directorio para siempre"
+        );
+        tokio::time::timeout(Duration::from_secs(5), bucle)
+            .await
+            .expect("el trabajador tenía que haber visto el centinela y salido")
+            .unwrap();
+    }
+
+    /// El otro lado de `cerrar_fase`, que el pánico no puede tapar: sin
+    /// pánico se conserva lo que ya hacía la parada -- corre igual, y su
+    /// error solo se propaga cuando la fase fue bien.
+    #[tokio::test]
+    async fn cerrar_fase_sin_panico_para_igual_y_conserva_el_error_de_la_fase() {
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().to_path_buf();
+        let trabajador = Some(crate::privilege::TrabajadorActivo::para_pruebas(
+            ruta.clone(),
+        ));
+
+        let devuelto = cerrar_fase(Ok(Err(AppError::RunAlreadyActive)), trabajador).await;
+
+        assert!(matches!(devuelto, Err(AppError::RunAlreadyActive)));
+        assert!(crate::privilege::hay_detener(&ruta));
+    }
 }
