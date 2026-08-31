@@ -297,6 +297,14 @@ async fn run_start(
     let cancelar = CancellationToken::new();
     reservar_ejecucion(&state, &cancelar)?;
 
+    // TODO(Fase 6, Task 6): sustituir este `false` por el `elevar` real
+    // que mande el frontend. Mientras siga aquí, la elevación entera está
+    // MUERTA: nada falla, no sale ningún diálogo, y todo el camino
+    // privilegiado (privilege.rs, worker.rs, el binario
+    // `privileged-worker`) queda sin usar sin que nada lo delate. De ahí
+    // la marca greppable: un `grep -rn TODO src-tauri/src/` antes de
+    // publicar tiene que tropezarse con esto.
+    //
     // Todavía sin elevación: este comando aún no recibe `elevar` del
     // frontend (llega en la Task 6 de la Fase 6). Con `false`, el
     // orquestador calcula `privilegio_disponible` como
