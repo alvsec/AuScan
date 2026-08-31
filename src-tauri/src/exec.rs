@@ -43,16 +43,20 @@ pub struct ResultadoEjecucion {
 /// Acumula bytes crudos y separa líneas completas por `\n`, tolerando
 /// también un `\r\n` final (Windows) al trocear — pero sin que esa
 /// tolerancia toque nunca los bytes que se acumulan para `raw`/`stderr`.
-struct AcumuladorLineas {
+///
+/// `pub(crate)`: la Fase 6 reutiliza este divisor de líneas para hacer
+/// tail de la salida de un proceso elevado, que llega por fichero en
+/// vez de por una tubería en memoria -- mismo divisor, otra fuente.
+pub(crate) struct AcumuladorLineas {
     buffer: Vec<u8>,
 }
 
 impl AcumuladorLineas {
-    fn nuevo() -> Self {
+    pub(crate) fn nuevo() -> Self {
         Self { buffer: Vec::new() }
     }
 
-    fn alimentar(&mut self, bytes: &[u8]) -> Vec<String> {
+    pub(crate) fn alimentar(&mut self, bytes: &[u8]) -> Vec<String> {
         self.buffer.extend_from_slice(bytes);
         let mut lineas = Vec::new();
         while let Some(pos) = self.buffer.iter().position(|&b| b == b'\n') {
@@ -279,7 +283,7 @@ pub async fn ejecutar(
 }
 
 #[cfg(unix)]
-async fn matar(hijo: &mut tokio::process::Child, pid: Option<u32>) {
+pub(crate) async fn matar(hijo: &mut tokio::process::Child, pid: Option<u32>) {
     let Some(pid) = pid else { return };
     // SAFETY: enviar una señal a un grupo de procesos que esta misma
     // función creó al lanzar el hijo (`process_group(0)`) no tiene más
@@ -300,7 +304,7 @@ async fn matar(hijo: &mut tokio::process::Child, pid: Option<u32>) {
 }
 
 #[cfg(not(unix))]
-async fn matar(hijo: &mut tokio::process::Child, _pid: Option<u32>) {
+pub(crate) async fn matar(hijo: &mut tokio::process::Child, _pid: Option<u32>) {
     let _ = hijo.kill().await;
 }
 

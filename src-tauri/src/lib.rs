@@ -11,6 +11,7 @@ pub mod privilege;
 pub mod runs;
 pub mod scope;
 pub mod state;
+pub mod worker;
 
 use tauri::Emitter;
 use tauri::{Manager, State};
