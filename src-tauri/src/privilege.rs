@@ -254,10 +254,7 @@ const PLAZO_CONFIRMACION_CANCELACION: Duration =
 /// root, así que la mitad de los permisos no se puede montar en disco:
 /// aquí sí.
 #[cfg(unix)]
-fn motivo_inseguro_para_root(uid: u32, modo: u32) -> Option<String> {
-    if uid != 0 {
-        return Some(format!("su dueño es el uid {uid}, no root"));
-    }
+fn motivo_inseguro_para_root(modo: u32) -> Option<String> {
     if modo & 0o022 != 0 {
         return Some(format!(
             "cualquiera de su grupo (o cualquiera a secas) puede escribirlo (modo {:04o})",
@@ -274,10 +271,21 @@ fn motivo_inseguro_para_root(uid: u32, modo: u32) -> Option<String> {
 /// permisos del propio operador -- desagradable, pero nada que no
 /// pudiera hacer ya quien tuviera acceso a esa cuenta. Con el trabajador,
 /// ESA MISMA ruta resuelta por `which` se ejecuta como root: si el
-/// fichero lo puede reescribir un usuario normal (que es exactamente el
-/// caso de un Homebrew estándar en Apple Silicon, donde
-/// `/opt/homebrew` es del usuario), un binario manipulado se convierte
-/// en un camino de usuario a root.
+/// fichero lo puede reescribir CUALQUIER OTRO usuario o proceso, un
+/// binario manipulado se convierte en un camino de usuario a root.
+///
+/// No se exige que el dueño sea root. El worker YA es root cuando llama
+/// a esto (verificado por su propio `geteuid()`, nunca por una promesa
+/// de quien le pide la orden); cuando un proceso root hace `exec()` de
+/// un fichero, el hijo hereda el UID del padre sea quien sea el dueño
+/// del fichero -- es el mismo mecanismo por el que `sudo nmap` funciona
+/// a diario con un nmap instalado por Homebrew, que en Apple Silicon
+/// siempre es del usuario, nunca de root. Exigir dueño root aquí no
+/// cerraría ningún camino de ataque adicional (quien ya controla la
+/// cuenta del operador puede reescribir un fichero suyo tanto como uno
+/// de root al que tuviera acceso de escritura) y dejaría la elevación
+/// inservible en el caso normal. Lo que sí importa es que NADIE MÁS
+/// pueda tocarlo entre el `which` y el `exec`.
 ///
 /// Límite conocido: se mira el fichero al que la ruta apunta, siguiendo
 /// enlaces, que es lo que de verdad se ejecuta -- igual que `sudo`, y
@@ -287,7 +295,7 @@ pub fn verificar_binario_para_root(binario: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     let metadatos = std::fs::metadata(binario).map_err(AppError::Io)?;
-    match motivo_inseguro_para_root(metadatos.uid(), metadatos.mode()) {
+    match motivo_inseguro_para_root(metadatos.mode()) {
         None => Ok(()),
         Some(motivo) => Err(AppError::BinarioInseguroParaRoot {
             ruta: binario.display().to_string(),
@@ -878,57 +886,67 @@ mod tests {
         assert!(PLAZO_CONFIRMACION_CANCELACION > crate::exec::PLAZO_GRACIA_MATAR);
     }
 
-    /// Antes de esta fase, un binario manipulado corría con los
-    /// permisos del operador. Ejecutar esa MISMA ruta como root
-    /// convierte un `nmap` reescribible por un usuario normal -- que es
-    /// lo que deja un Homebrew estándar en Apple Silicon -- en un camino
-    /// de usuario a root. Se rechaza antes de pedirle nada al
-    /// trabajador.
+    /// Un nmap normal de Homebrew: del usuario, no de root, pero sin
+    /// escritura para nadie más. Este es EXACTAMENTE el caso que rompía
+    /// antes de relajar el criterio -- tiene que aceptarse, porque es el
+    /// caso normal, no el ataque.
     #[cfg(unix)]
     #[test]
-    fn un_binario_que_no_es_de_root_no_se_ejecuta_como_root() {
+    fn un_binario_del_usuario_sin_escritura_ajena_se_puede_ejecutar_como_root() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let nmap_de_homebrew = dir.path().join("nmap");
+        std::fs::write(&nmap_de_homebrew, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&nmap_de_homebrew, std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+
+        verificar_binario_para_root(&nmap_de_homebrew)
+            .expect("un binario del propio operador, no escribible por nadie más, es seguro de ejecutar como root");
+    }
+
+    /// El caso que sí hay que rechazar: cualquiera de su grupo, o
+    /// cualquiera a secas, puede reescribirlo antes del `exec`.
+    #[cfg(unix)]
+    #[test]
+    fn un_binario_escribible_por_otros_no_se_ejecuta_como_root() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
         let falso = dir.path().join("nmap");
         std::fs::write(&falso, b"#!/bin/sh\nexit 0\n").unwrap();
-        // Permisos impecables: lo único malo es de quién es.
-        std::fs::set_permissions(&falso, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&falso, std::fs::Permissions::from_mode(0o757)).unwrap();
 
         let error = verificar_binario_para_root(&falso)
-            .expect_err("un binario que no es de root no puede ejecutarse como root");
+            .expect_err("un binario escribible por cualquiera no puede ejecutarse como root");
         assert!(
             matches!(error, AppError::BinarioInseguroParaRoot { ref ruta, .. } if ruta == &falso.display().to_string()),
             "llegó {error:?}"
         );
     }
 
-    /// El otro lado: un binario del sistema, de root y sin escritura
-    /// para nadie más, sí pasa. Sin esto, la comprobación podría estar
-    /// rechazándolo todo y el test de arriba pasaría igual.
+    /// El otro lado del mismo caso: un binario del sistema, de root y
+    /// sin escritura para nadie más, también pasa. Sin esto, la
+    /// comprobación podría estar aceptándolo todo y el test de arriba
+    /// pasaría igual.
     #[cfg(unix)]
     #[test]
     fn un_binario_del_sistema_si_se_puede_ejecutar_como_root() {
         verificar_binario_para_root(Path::new("/bin/sh"))
-            .expect("/bin/sh es de root y no lo escribe nadie más");
+            .expect("/bin/sh no lo escribe nadie más que root");
     }
 
-    /// La otra mitad del criterio -- los permisos de escritura -- no se
-    /// puede montar en disco: un test que corre como usuario normal no
-    /// puede crear un fichero de root al que ponerle un modo malo. Por
-    /// eso el criterio vive en una función pura, y se prueba aquí
-    /// entero.
+    /// El criterio -- ahora solo permisos de escritura, sin exigir dueño
+    /// root -- vive en una función pura y se prueba aquí entero.
     #[cfg(unix)]
     #[test]
-    fn el_criterio_exige_dueno_root_y_ninguna_escritura_ajena() {
-        assert_eq!(motivo_inseguro_para_root(0, 0o100755), None);
-        assert_eq!(motivo_inseguro_para_root(0, 0o100555), None);
-        // De root, pero escribible por su grupo.
-        assert!(motivo_inseguro_para_root(0, 0o100775).is_some());
-        // De root, pero escribible por cualquiera.
-        assert!(motivo_inseguro_para_root(0, 0o100757).is_some());
-        // Permisos perfectos, dueño equivocado.
-        assert!(motivo_inseguro_para_root(501, 0o100755).is_some());
+    fn el_criterio_exige_ninguna_escritura_ajena_sin_importar_el_dueno() {
+        assert_eq!(motivo_inseguro_para_root(0o100755), None);
+        assert_eq!(motivo_inseguro_para_root(0o100555), None);
+        // Escribible por su grupo.
+        assert!(motivo_inseguro_para_root(0o100775).is_some());
+        // Escribible por cualquiera.
+        assert!(motivo_inseguro_para_root(0o100757).is_some());
     }
 
     /// Un doble del `osascript` que sigue con el diálogo abierto: un
