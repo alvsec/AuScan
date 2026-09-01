@@ -254,7 +254,12 @@ const PLAZO_CONFIRMACION_CANCELACION: Duration =
 /// root, así que la mitad de los permisos no se puede montar en disco:
 /// aquí sí.
 #[cfg(unix)]
-fn motivo_inseguro_para_root(modo: u32) -> Option<String> {
+fn motivo_inseguro_para_root(uid: u32, modo: u32, uid_operador: u32) -> Option<String> {
+    if uid != 0 && uid != uid_operador {
+        return Some(format!(
+            "su dueño es el uid {uid}, ni root ni el operador (uid {uid_operador})"
+        ));
+    }
     if modo & 0o022 != 0 {
         return Some(format!(
             "cualquiera de su grupo (o cualquiera a secas) puede escribirlo (modo {:04o})",
@@ -274,18 +279,17 @@ fn motivo_inseguro_para_root(modo: u32) -> Option<String> {
 /// fichero lo puede reescribir CUALQUIER OTRO usuario o proceso, un
 /// binario manipulado se convierte en un camino de usuario a root.
 ///
-/// No se exige que el dueño sea root. El worker YA es root cuando llama
-/// a esto (verificado por su propio `geteuid()`, nunca por una promesa
-/// de quien le pide la orden); cuando un proceso root hace `exec()` de
-/// un fichero, el hijo hereda el UID del padre sea quien sea el dueño
-/// del fichero -- es el mismo mecanismo por el que `sudo nmap` funciona
-/// a diario con un nmap instalado por Homebrew, que en Apple Silicon
-/// siempre es del usuario, nunca de root. Exigir dueño root aquí no
-/// cerraría ningún camino de ataque adicional (quien ya controla la
-/// cuenta del operador puede reescribir un fichero suyo tanto como uno
-/// de root al que tuviera acceso de escritura) y dejaría la elevación
-/// inservible en el caso normal. Lo que sí importa es que NADIE MÁS
-/// pueda tocarlo entre el `which` y el `exec`.
+/// El dueño tiene que ser root o el propio operador -- nunca un tercer
+/// usuario del sistema. No hace falta que sea root: el worker YA es
+/// root cuando llama a esto (verificado por su propio `geteuid()`,
+/// nunca por una promesa de quien le pide la orden), y cuando un
+/// proceso root hace `exec()` de un fichero, el hijo hereda el UID del
+/// padre sea quien sea el dueño del fichero -- es el mismo mecanismo
+/// por el que `sudo nmap` funciona a diario con un nmap instalado por
+/// Homebrew, que en Apple Silicon siempre es del usuario, nunca de
+/// root. Pero sí hace falta que sea ALGUNO de los dos: un binario de un
+/// tercer usuario, aunque tenga permisos de escritura impecables, lo
+/// puede reescribir a placer una cuenta que el operador no controla.
 ///
 /// Límite conocido: se mira el fichero al que la ruta apunta, siguiendo
 /// enlaces, que es lo que de verdad se ejecuta -- igual que `sudo`, y
@@ -295,7 +299,11 @@ pub fn verificar_binario_para_root(binario: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     let metadatos = std::fs::metadata(binario).map_err(AppError::Io)?;
-    match motivo_inseguro_para_root(metadatos.mode()) {
+    // El uid REAL de este mismo proceso: aquí quien llama es siempre la
+    // app sin privilegios (el worker no tiene binario que comprobar más
+    // que el que ya le mandaron), así que es el uid del operador.
+    let uid_operador = unsafe { libc::getuid() };
+    match motivo_inseguro_para_root(metadatos.uid(), metadatos.mode(), uid_operador) {
         None => Ok(()),
         Some(motivo) => Err(AppError::BinarioInseguroParaRoot {
             ruta: binario.display().to_string(),
@@ -936,17 +944,28 @@ mod tests {
             .expect("/bin/sh no lo escribe nadie más que root");
     }
 
-    /// El criterio -- ahora solo permisos de escritura, sin exigir dueño
-    /// root -- vive en una función pura y se prueba aquí entero.
+    /// El criterio -- dueño root o el propio operador, y ninguna
+    /// escritura ajena -- vive en una función pura y se prueba aquí
+    /// entero. La mitad "tercer usuario" no se puede montar en disco
+    /// (un test no puede crear un fichero de otro uid), así que vive
+    /// solo aquí.
     #[cfg(unix)]
     #[test]
-    fn el_criterio_exige_ninguna_escritura_ajena_sin_importar_el_dueno() {
-        assert_eq!(motivo_inseguro_para_root(0o100755), None);
-        assert_eq!(motivo_inseguro_para_root(0o100555), None);
+    fn el_criterio_exige_dueno_root_o_del_operador_y_ninguna_escritura_ajena() {
+        const OPERADOR: u32 = 501;
+        assert_eq!(motivo_inseguro_para_root(0, 0o100755, OPERADOR), None);
+        assert_eq!(
+            motivo_inseguro_para_root(OPERADOR, 0o100755, OPERADOR),
+            None
+        );
+        assert_eq!(motivo_inseguro_para_root(0, 0o100555, OPERADOR), None);
         // Escribible por su grupo.
-        assert!(motivo_inseguro_para_root(0o100775).is_some());
+        assert!(motivo_inseguro_para_root(OPERADOR, 0o100775, OPERADOR).is_some());
         // Escribible por cualquiera.
-        assert!(motivo_inseguro_para_root(0o100757).is_some());
+        assert!(motivo_inseguro_para_root(OPERADOR, 0o100757, OPERADOR).is_some());
+        // Permisos impecables, pero de un tercer usuario que el
+        // operador no controla.
+        assert!(motivo_inseguro_para_root(777, 0o100755, OPERADOR).is_some());
     }
 
     /// Un doble del `osascript` que sigue con el diálogo abierto: un
