@@ -523,43 +523,46 @@ async fn una_fase_elevada_numera_sus_ordenes_desde_uno_aunque_el_expediente_no_e
 
     // 2. Y la base y los crudos siguen con el seq ENGAGEMENT-global de
     //    siempre: es lo que el expediente ya archivado usa para
-    //    referirse a cada ejecución.
-    let guard = state.open.lock().unwrap();
-    let conn = &guard.as_ref().unwrap().conn;
-    let seqs: Vec<i64> = conn
-        .prepare("SELECT seq FROM tool_run WHERE tool = 'eco-por-objetivo' ORDER BY seq")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect();
-    assert_eq!(seqs, vec![5, 6]);
-    for (seq, ip) in [(5, "198.51.100.5"), (6, "198.51.100.6")] {
-        let (status, raw_path): (String, Option<String>) = conn
-            .query_row(
-                "SELECT status, raw_path FROM tool_run WHERE seq = ?1",
-                [seq],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            status, "ok",
-            "la invocación de {ip} tenía que correr entera"
-        );
-        assert_eq!(
-            raw_path,
-            Some(format!("raw/{seq:04}-eco-por-objetivo-services.xml"))
-        );
-        assert!(auscan_lib::paths::engagement_dir(dir.path(), &id)
+    //    referirse a cada ejecución. (En su propio bloque: el guard no
+    //    puede seguir vivo cuando abajo se vuelve a esperar al
+    //    trabajador.)
+    {
+        let guard = state.open.lock().unwrap();
+        let conn = &guard.as_ref().unwrap().conn;
+        let seqs: Vec<i64> = conn
+            .prepare("SELECT seq FROM tool_run WHERE tool = 'eco-por-objetivo' ORDER BY seq")
             .unwrap()
-            .join(raw_path.unwrap())
-            .is_file());
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(seqs, vec![5, 6]);
+        for (seq, ip) in [(5, "198.51.100.5"), (6, "198.51.100.6")] {
+            let (status, raw_path): (String, Option<String>) = conn
+                .query_row(
+                    "SELECT status, raw_path FROM tool_run WHERE seq = ?1",
+                    [seq],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                status, "ok",
+                "la invocación de {ip} tenía que correr entera"
+            );
+            assert_eq!(
+                raw_path,
+                Some(format!("raw/{seq:04}-eco-por-objetivo-services.xml"))
+            );
+            assert!(auscan_lib::paths::engagement_dir(dir.path(), &id)
+                .unwrap()
+                .join(raw_path.unwrap())
+                .is_file());
+        }
     }
-    drop(guard);
 
-    auscan_lib::privilege::detener_trabajador(trabajador.unwrap())
-        .await
-        .unwrap();
+    if let Some(t) = trabajador {
+        auscan_lib::privilege::detener_trabajador(t).await.unwrap();
+    }
     tokio::time::timeout(Duration::from_secs(5), bucle)
         .await
         .expect("el trabajador tenía que salir con el centinela de detener")

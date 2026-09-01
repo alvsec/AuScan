@@ -244,6 +244,67 @@ const INTERVALO_SONDEO_LECTURA: Duration = Duration::from_millis(200);
 const PLAZO_CONFIRMACION_CANCELACION: Duration =
     Duration::from_secs(crate::exec::PLAZO_GRACIA_MATAR.as_secs() + 5);
 
+/// Por qué este binario NO se puede ejecutar como root, si es que no se
+/// puede. El criterio es el mismo que aplica `sudo` a lo que hay en su
+/// `secure_path`: dueño root y sin permiso de escritura para grupo ni
+/// para otros.
+///
+/// Va aparte del `stat` para poder probar las dos mitades del criterio.
+/// Un test que corre como usuario normal no puede crear un fichero de
+/// root, así que la mitad de los permisos no se puede montar en disco:
+/// aquí sí.
+#[cfg(unix)]
+fn motivo_inseguro_para_root(uid: u32, modo: u32) -> Option<String> {
+    if uid != 0 {
+        return Some(format!("su dueño es el uid {uid}, no root"));
+    }
+    if modo & 0o022 != 0 {
+        return Some(format!(
+            "cualquiera de su grupo (o cualquiera a secas) puede escribirlo (modo {:04o})",
+            modo & 0o7777
+        ));
+    }
+    None
+}
+
+/// Comprueba que `binario` se puede lanzar COMO ROOT sin abrir un camino
+/// de escalada de privilegios.
+///
+/// Sin trabajador elevado, un `nmap` manipulado solo corría con los
+/// permisos del propio operador -- desagradable, pero nada que no
+/// pudiera hacer ya quien tuviera acceso a esa cuenta. Con el trabajador,
+/// ESA MISMA ruta resuelta por `which` se ejecuta como root: si el
+/// fichero lo puede reescribir un usuario normal (que es exactamente el
+/// caso de un Homebrew estándar en Apple Silicon, donde
+/// `/opt/homebrew` es del usuario), un binario manipulado se convierte
+/// en un camino de usuario a root.
+///
+/// Límite conocido: se mira el fichero al que la ruta apunta, siguiendo
+/// enlaces, que es lo que de verdad se ejecuta -- igual que `sudo`, y
+/// como `sudo`, sin recorrer los permisos de cada directorio del camino.
+#[cfg(unix)]
+pub fn verificar_binario_para_root(binario: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadatos = std::fs::metadata(binario).map_err(AppError::Io)?;
+    match motivo_inseguro_para_root(metadatos.uid(), metadatos.mode()) {
+        None => Ok(()),
+        Some(motivo) => Err(AppError::BinarioInseguroParaRoot {
+            ruta: binario.display().to_string(),
+            motivo,
+        }),
+    }
+}
+
+/// Fuera de Unix no hay elevación en este proyecto (`ejecutar_fase`
+/// rechaza `elevar` antes de llegar aquí), así que no hay nada que
+/// comprobar: existe para que el orquestador no tenga que llevar un
+/// `cfg` por dentro.
+#[cfg(not(unix))]
+pub fn verificar_binario_para_root(_binario: &Path) -> Result<()> {
+    Ok(())
+}
+
 /// Un trabajador elevado vivo, con su propio directorio de control.
 /// `detener_trabajador` es lo único que lo cierra correctamente --
 /// dejar caer este valor sin llamarla deja el proceso root esperando
@@ -815,6 +876,59 @@ mod tests {
         // se construye por encima de la gracia de `exec::matar`, que es
         // justo lo que el trabajador tarda en el peor caso legítimo.
         assert!(PLAZO_CONFIRMACION_CANCELACION > crate::exec::PLAZO_GRACIA_MATAR);
+    }
+
+    /// Antes de esta fase, un binario manipulado corría con los
+    /// permisos del operador. Ejecutar esa MISMA ruta como root
+    /// convierte un `nmap` reescribible por un usuario normal -- que es
+    /// lo que deja un Homebrew estándar en Apple Silicon -- en un camino
+    /// de usuario a root. Se rechaza antes de pedirle nada al
+    /// trabajador.
+    #[cfg(unix)]
+    #[test]
+    fn un_binario_que_no_es_de_root_no_se_ejecuta_como_root() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let falso = dir.path().join("nmap");
+        std::fs::write(&falso, b"#!/bin/sh\nexit 0\n").unwrap();
+        // Permisos impecables: lo único malo es de quién es.
+        std::fs::set_permissions(&falso, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = verificar_binario_para_root(&falso)
+            .expect_err("un binario que no es de root no puede ejecutarse como root");
+        assert!(
+            matches!(error, AppError::BinarioInseguroParaRoot { ref ruta, .. } if ruta == &falso.display().to_string()),
+            "llegó {error:?}"
+        );
+    }
+
+    /// El otro lado: un binario del sistema, de root y sin escritura
+    /// para nadie más, sí pasa. Sin esto, la comprobación podría estar
+    /// rechazándolo todo y el test de arriba pasaría igual.
+    #[cfg(unix)]
+    #[test]
+    fn un_binario_del_sistema_si_se_puede_ejecutar_como_root() {
+        verificar_binario_para_root(Path::new("/bin/sh"))
+            .expect("/bin/sh es de root y no lo escribe nadie más");
+    }
+
+    /// La otra mitad del criterio -- los permisos de escritura -- no se
+    /// puede montar en disco: un test que corre como usuario normal no
+    /// puede crear un fichero de root al que ponerle un modo malo. Por
+    /// eso el criterio vive en una función pura, y se prueba aquí
+    /// entero.
+    #[cfg(unix)]
+    #[test]
+    fn el_criterio_exige_dueno_root_y_ninguna_escritura_ajena() {
+        assert_eq!(motivo_inseguro_para_root(0, 0o100755), None);
+        assert_eq!(motivo_inseguro_para_root(0, 0o100555), None);
+        // De root, pero escribible por su grupo.
+        assert!(motivo_inseguro_para_root(0, 0o100775).is_some());
+        // De root, pero escribible por cualquiera.
+        assert!(motivo_inseguro_para_root(0, 0o100757).is_some());
+        // Permisos perfectos, dueño equivocado.
+        assert!(motivo_inseguro_para_root(501, 0o100755).is_some());
     }
 
     /// Un doble del `osascript` que sigue con el diálogo abierto: un

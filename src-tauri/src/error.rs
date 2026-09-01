@@ -99,6 +99,13 @@ pub enum AppError {
     #[error("elevación fallida: {0}")]
     ElevationFailed(String),
 
+    /// El binario resuelto no cumple el criterio mínimo para lanzarse
+    /// COMO ROOT. No dice que la herramienta esté manipulada: dice que
+    /// si lo estuviera, ejecutarla elevada convertiría eso en una
+    /// escalada a root.
+    #[error("no se puede ejecutar {ruta} como root: {motivo}")]
+    BinarioInseguroParaRoot { ruta: String, motivo: String },
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 

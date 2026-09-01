@@ -505,6 +505,21 @@ async fn ejecutar_invocacion(
         privilegio_disponible,
     )?;
 
+    // Y una comprobación MÁS, solo para lo que va a correr como root: que
+    // el binario sea de root y que no lo pueda reescribir nadie más.
+    //
+    // Es específica de este camino, no un requisito general: sin
+    // trabajador, un binario manipulado corre con los permisos del
+    // operador y no gana nada: con trabajador, esa misma ruta se ejecuta
+    // como root y se convierte en un camino de usuario a root.
+    //
+    // Va aquí, antes de la fila de `tool_run`, por la misma razón que la
+    // verja: una invocación que se rechaza no llegó a ejecutar nada, así
+    // que no puede dejar rastro de haberlo hecho.
+    if trabajador.is_some() {
+        crate::privilege::verificar_binario_para_root(&binario)?;
+    }
+
     let (tool_run_id, seq) = {
         let guard = state.open.lock().unwrap_or_else(|e| e.into_inner());
         let abierto = guard.as_ref().ok_or(AppError::NoEngagementOpen)?;
